@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "verifyoor"
+version = "0.1.0"
+description = "Verify Solidity source against EVM runtime bytecode (Etherscan/Sourcify partial-match standard)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+# keccak-256 is required (Python's hashlib ships NIST SHA3, not Ethereum keccak);
+# util.py falls back to pysha3 / eth-hash if either is present instead.
+dependencies = ["pycryptodome>=3.19"]
+
+[project.urls]
+Repository = "https://github.com/Decurity/verifyoor"
+
+[project.scripts]
+verifyoor = "verifyoor.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["verifyoor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

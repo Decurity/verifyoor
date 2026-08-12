@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# uv / virtualenv
+.venv/
+
+# test / tooling caches
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+
+# verifyoor run artifacts
+runs/

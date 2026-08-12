@@ -1,0 +1,30 @@
+{
+  "vault": {
+    "solc": "0.8.20",
+    "settings": "optimizer=runs=200 evm=shanghai viaIR=False",
+    "contract": "Vault",
+    "runtime_len": 1792,
+    "immutables": true
+  },
+  "counter_unopt": {
+    "solc": "0.8.20",
+    "settings": "optimizer=off evm=shanghai viaIR=False",
+    "contract": "Counter",
+    "runtime_len": 1004,
+    "immutables": false
+  },
+  "registry_old": {
+    "solc": "0.7.6",
+    "settings": "optimizer=runs=200 evm=istanbul viaIR=False",
+    "contract": "Registry",
+    "runtime_len": 517,
+    "immutables": false
+  },
+  "rescuer_viair": {
+    "solc": "0.8.35",
+    "settings": "optimizer=runs=200 evm=shanghai viaIR=True",
+    "contract": "Rescuer",
+    "runtime_len": 899,
+    "immutables": true
+  }
+}
