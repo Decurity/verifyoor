@@ -6,6 +6,10 @@ source + compiler settings that recompile to byte-identical bytecode, to the
 the trailing CBOR metadata, which encodes a hash of the original source file and
 is unrecoverable from bytecode).
 
+**Demo:** a contract reconstructed and verified with verifyoor —
+[`0xbdd0…9516`](https://etherscan.io/address/0xbdd077f651ebe7f7b3ce16fe5f2b025be2969516#code)
+(published on Etherscan and Sourcify).
+
 ## How it works
 
 Two layers:
@@ -53,8 +57,8 @@ uv run verifyoor decompile <network> <address> --out D
 uv run verifyoor verify    <src.sol> <network> <address> --sweep --out runs/<name>
 
 # local bytecode works in place of <network> <address>:
-uv run verifyoor analyze   test.hex
-uv run verifyoor verify    test.sol test.hex --sweep
+uv run verifyoor analyze   tests/fixtures/sample.hex
+uv run verifyoor verify    tests/fixtures/sample.sol tests/fixtures/sample.hex --sweep
 ```
 
 `<network>` is an alias (`ethereum`, `base`, `arbitrum`, `optimism`, `polygon`,

@@ -17,7 +17,7 @@ def run_verify(solfile, hexfile, *extra):
 
 
 def test_sample_verifies():
-    r = run_verify(os.path.join(ROOT, "test.sol"), os.path.join(ROOT, "test.hex"), "--out", "/tmp/vy_sample")
+    r = run_verify(os.path.join(ROOT, "tests", "fixtures", "sample.sol"), os.path.join(ROOT, "tests", "fixtures", "sample.hex"), "--out", "/tmp/vy_sample")
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
     assert out["match"] is True
@@ -45,5 +45,5 @@ def test_wrong_source_does_not_match():
     bad = os.path.join("/tmp", "vy_bad.sol")
     with open(bad, "w") as f:
         f.write("pragma solidity 0.8.20;\ncontract X { uint256 public y; function f() external { y = 1; } }\n")
-    r = run_verify(bad, os.path.join(ROOT, "test.hex"))
+    r = run_verify(bad, os.path.join(ROOT, "tests", "fixtures", "sample.hex"))
     assert r.returncode == 1

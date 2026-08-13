@@ -7,7 +7,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def sample():
-    return load_bytecode(os.path.join(ROOT, "test.hex"))
+    return load_bytecode(os.path.join(ROOT, "tests", "fixtures", "sample.hex"))
 
 
 def test_parse_trailing_sample():

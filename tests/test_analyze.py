@@ -10,7 +10,7 @@ FIX = os.path.join(ROOT, "tests", "fixtures")
 
 
 def sample():
-    return load_bytecode(os.path.join(ROOT, "test.hex"))
+    return load_bytecode(os.path.join(ROOT, "tests", "fixtures", "sample.hex"))
 
 
 def _fixture(name):

@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _target_no_meta():
-    code = load_bytecode(os.path.join(ROOT, "test.hex"))
+    code = load_bytecode(os.path.join(ROOT, "tests", "fixtures", "sample.hex"))
     stripped, _ = strip_trailing(code)
     return code, stripped
 
@@ -39,7 +39,7 @@ def test_immutable_masking_recovers_value():
     off = 100
     target[off : off + 32] = bytes(range(1, 33))  # nonzero on-chain value
     # rebuild a target-with-metadata so compare strips consistently
-    target_full = bytes(target) + load_bytecode(os.path.join(ROOT, "test.hex"))[989:]
+    target_full = bytes(target) + load_bytecode(os.path.join(ROOT, "tests", "fixtures", "sample.hex"))[989:]
     candidate = ContractOut(
         name="Test",
         deployed_object=stripped.hex(),  # zeros in that slot
@@ -58,7 +58,7 @@ def test_link_placeholder_masking():
     target = bytearray(stripped)
     addr = bytes.fromhex("11" * 20)
     target[off : off + 20] = addr
-    target_full = bytes(target) + load_bytecode(os.path.join(ROOT, "test.hex"))[989:]
+    target_full = bytes(target) + load_bytecode(os.path.join(ROOT, "tests", "fixtures", "sample.hex"))[989:]
     # a 40-char __$...$__ placeholder occupies exactly 20 bytes of the hex string
     placeholder = "__$" + "a" * 34 + "$__"
     cand_hex = stripped.hex()[: off * 2] + placeholder + stripped.hex()[(off + 20) * 2 :]

@@ -10,12 +10,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _setup():
-    target = load_bytecode(os.path.join(ROOT, "test.hex"))
+    target = load_bytecode(os.path.join(ROOT, "tests", "fixtures", "sample.hex"))
     a = analyze(target)
     for s in a.selectors:
         s.signature = {"b269681d": "destination()", "c4d66de8": "initialize(address)"}.get(s.selector)
     tstrip, _ = strip_trailing(target)
-    src = open(os.path.join(ROOT, "test.sol")).read()
+    src = open(os.path.join(ROOT, "tests", "fixtures", "sample.sol")).read()
     return target, a, tstrip, src
 
 
