@@ -242,6 +242,53 @@ def cmd_verify(args) -> int:
     return 1
 
 
+def cmd_submit(args) -> int:
+    from .submit import build_standard_input, chain_id_for, etherscan_submit, solc_long_version, sourcify_submit
+
+    run_dir = args.rundir
+    try:
+        meta = json.loads(open(os.path.join(run_dir, "settings.json")).read())
+        source = open(os.path.join(run_dir, "source.sol")).read()
+    except OSError as e:
+        _eprint("submit: %s (expected a verify run dir with settings.json + source.sol)" % e)
+        return 2
+
+    version = meta["solcVersion"]
+    source_name = meta.get("sourceName", "source.sol")
+    contract_name = args.contract or meta["contractName"]
+    identifier = "%s:%s" % (source_name, contract_name)
+    std = build_standard_input(source, meta["settings"], source_name)
+    try:
+        chainid = chain_id_for(args.network)
+        long_version = solc_long_version(version)
+    except (ValueError, RuntimeError) as e:
+        _eprint("submit: %s" % e)
+        return 2
+
+    poll = not args.no_wait
+    results: Dict[str, Any] = {}
+    overall_ok = True
+
+    if args.verifier in ("etherscan", "both"):
+        key = args.api_key or os.environ.get("ETHERSCAN_API_KEY")
+        if not key:
+            _eprint("submit: no Etherscan API key (--api-key or ETHERSCAN_API_KEY)")
+            return 2
+        ok, msg = etherscan_submit(chainid, args.address, std, identifier, long_version, key, args.constructor_args or "", poll=poll)
+        _eprint("etherscan: %s — %s" % ("✅" if ok else "❌", msg))
+        results["etherscan"] = {"ok": ok, "message": msg}
+        overall_ok = overall_ok and ok
+
+    if args.verifier in ("sourcify", "both"):
+        ok, msg = sourcify_submit(chainid, args.address, std, identifier, long_version, poll=poll)
+        _eprint("sourcify: %s — %s" % ("✅" if ok else "❌", msg))
+        results["sourcify"] = {"ok": ok, "message": msg}
+        overall_ok = overall_ok and ok
+
+    print(json.dumps({"address": args.address, "chainid": chainid, "compiler": "v" + long_version, "contract": identifier, "results": results}, indent=2))
+    return 0 if overall_ok else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="verifyoor", description="Verify Solidity source against EVM runtime bytecode.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -278,6 +325,17 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--out", help="artifacts output directory (on match)")
     pv.add_argument("--offline", action="store_true", help="skip openchain network lookups")
     pv.set_defaults(func=cmd_verify)
+
+    ps = sub.add_parser("submit", help="submit a verified run dir to Etherscan/Sourcify (standard-json)")
+    ps.add_argument("rundir", help="a verify --out directory (with settings.json + source.sol)")
+    ps.add_argument("network", help="network alias or numeric chain id")
+    ps.add_argument("address", help="deployed contract address (0x…)")
+    ps.add_argument("--verifier", choices=["etherscan", "sourcify", "both"], default="etherscan")
+    ps.add_argument("--api-key", help="Etherscan API key (else $ETHERSCAN_API_KEY)")
+    ps.add_argument("--constructor-args", help="ABI-encoded constructor args hex (if any)")
+    ps.add_argument("--contract", help="contract name override")
+    ps.add_argument("--no-wait", action="store_true", help="submit without polling for the result")
+    ps.set_defaults(func=cmd_submit)
     return p
 
 

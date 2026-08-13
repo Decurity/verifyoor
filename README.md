@@ -62,9 +62,25 @@ uv run verifyoor verify    test.sol test.hex --sweep
 `VERIFYOOR_RPC_<NETWORK>` is honored. Fetched code is cached under
 `~/.cache/verifyoor/bytecode`.
 
-`verify` exits 0 on match (writing `source.sol`, `settings.json`, `report.{json,md}`
-to the run dir), 1 on mismatch (printing a function-attributed diff for the next
-iteration).
+`verify` exits 0 on match (writing `source.sol`, `settings.json`,
+`standard-input.json`, `report.{json,md}` to the run dir), 1 on mismatch (printing
+a function-attributed diff for the next iteration).
+
+## Publishing (Etherscan / Sourcify)
+
+On a match, verifyoor writes `standard-input.json` — the solc Standard-JSON-Input
+with the evmVersion (and optimizer/viaIR) **embedded**. Use standard-json, not
+single-file/flatten: the flatten path lets the verifier default the evmVersion,
+which silently fails for any contract built for a non-default target (e.g. a
+`paris` build on a `0.8.26` contract whose default is `cancun`).
+
+```sh
+uv run verifyoor submit runs/<name> <network> <address> --verifier both
+```
+
+Submits that standard-json to Etherscan (`$ETHERSCAN_API_KEY` or `--api-key`)
+and/or Sourcify (`--verifier etherscan|sourcify|both`) and polls to completion.
+Pass `--constructor-args <hex>` if the contract has a constructor with arguments.
 
 ## Match standard
 

@@ -8,6 +8,10 @@ dist/
 # uv / virtualenv
 .venv/
 
+# editors
+.vscode/
+.idea/
+
 # test / tooling caches
 .pytest_cache/
 .hypothesis/

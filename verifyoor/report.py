@@ -93,6 +93,7 @@ def write_artifacts(
     paths = {
         "source": os.path.join(outdir, "source.sol"),
         "settings": os.path.join(outdir, "settings.json"),
+        "standard_input": os.path.join(outdir, "standard-input.json"),
         "report_json": os.path.join(outdir, "report.json"),
         "report_md": os.path.join(outdir, "report.md"),
     }
@@ -100,6 +101,11 @@ def write_artifacts(
         f.write(source)
     with open(paths["settings"], "w") as f:
         json.dump(build_settings_json(version, settings, contract_name), f, indent=2)
+    # ready-to-submit Etherscan/Sourcify standard-json input (evmVersion embedded)
+    from .submit import build_standard_input
+
+    with open(paths["standard_input"], "w") as f:
+        json.dump(build_standard_input(source, settings.to_solc(version)), f, indent=2)
     with open(paths["report_json"], "w") as f:
         json.dump(report, f, indent=2)
     with open(paths["report_md"], "w") as f:

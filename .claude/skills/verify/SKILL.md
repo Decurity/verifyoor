@@ -123,11 +123,19 @@ Edit `candidate.sol` (save iterations as `candidate_2.sol`, … for debugging) a
 return to step 4. The diff shrinks region-by-region as you converge.
 
 ### 6. On match
-`verify` writes `source.sol`, `settings.json`, `report.{json,md}` to `runs/<name>/`.
-Confirm and summarize for the user:
+`verify` writes `source.sol`, `settings.json`, `standard-input.json`, and
+`report.{json,md}` to `runs/<name>/`. Confirm and summarize for the user:
 - match type (partial), solc version + settings that matched, contract name;
 - any **recovered immutables** (offset → value) and **library addresses**;
 - any **unresolved selectors** whose names are best-effort.
+
+To publish to a block explorer, use the emitted standard-json (evmVersion embedded):
+```
+uv run verifyoor submit runs/<name> <network> <address> --verifier both
+```
+Always submit via standard-json, never single-file/flatten — the flatten path lets
+the explorer default the evmVersion, which fails for any non-default-EVM build.
+Add `--constructor-args <hex>` if the contract's constructor takes arguments.
 
 ## Unresolved selectors
 
