@@ -15,10 +15,45 @@ _PRINTABLE = set(_string.printable) - set("\x0b\x0c")
 class SelectorEntry:
     selector: str  # 8 hex chars, no 0x
     body_offset: int
-    signature: Optional[str] = None  # filled by resolve step
+    signature: Optional[str] = None  # filled by resolve step (openchain)
+    arguments: Optional[str] = None  # canonical arg types from evmole, e.g. "address,uint256"
+    state_mutability: Optional[str] = None  # "pure"|"view"|"payable"|"nonpayable" from evmole
+
+    @property
+    def db_name_conflict(self) -> bool:
+        """True when the DB-resolved name's arg types disagree with evmole's.
+
+        A 4-byte selector has many preimages, so an openchain hit can be the wrong
+        one (e.g. `transfer(address,uint256)` for a function whose bytecode actually
+        decodes four arrays). When evmole's decoded arg types don't match the
+        resolved signature's, the name is a collision — mint from evmole's types."""
+        if not self.signature or self.arguments is None:
+            return False
+        return _canon_args(_sig_args(self.signature)) != _canon_args(self.arguments)
+
+    def mint_signature(self) -> str:
+        """Arg-type signature to hand `mine-selector` when the name is unrecoverable."""
+        return "(%s)" % (self.arguments or "")
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"selector": self.selector, "body_offset": self.body_offset, "signature": self.signature}
+        return {
+            "selector": self.selector,
+            "body_offset": self.body_offset,
+            "signature": self.signature,
+            "arguments": self.arguments,
+            "state_mutability": self.state_mutability,
+            "db_name_conflict": self.db_name_conflict,
+        }
+
+
+def _sig_args(signature: str) -> str:
+    """The arg-type list inside a canonical signature: 'f(a,b)' -> 'a,b'."""
+    i = signature.find("(")
+    return signature[i + 1 : signature.rfind(")")] if i >= 0 else ""
+
+
+def _canon_args(args: str) -> str:
+    return "".join(args.split())  # whitespace-insensitive compare
 
 
 @dataclass
@@ -35,6 +70,7 @@ class Analysis:
     optimizer_guess: str = "unknown"  # "off" | "on" | "unknown"
     via_ir_guess: str = "unknown"  # "likely" | "unlikely" | "unknown"
     embedded_metadata: List[Tuple[int, int]] = field(default_factory=list)
+    evmole_available: bool = False  # whether arg types / mutability were enriched
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -50,7 +86,34 @@ class Analysis:
             "optimizer_guess": self.optimizer_guess,
             "via_ir_guess": self.via_ir_guess,
             "embedded_metadata": [list(r) for r in self.embedded_metadata],
+            "evmole_available": self.evmole_available,
         }
+
+
+def enrich_with_evmole(code: bytes, selectors: List[SelectorEntry]) -> bool:
+    """Fill each selector's `arguments` + `state_mutability` from evmole.
+
+    evmole (https://github.com/cdump/evmole, MIT) recovers argument types and
+    mutability from bytecode with materially better accuracy than heimdall's ABI
+    guess. Optional dependency: if it isn't importable we leave the fields None and
+    return False, so analysis degrades gracefully. Matched to our dispatcher entries
+    by selector, so our trampoline-resolved body offsets are preserved."""
+    try:
+        import evmole
+    except ImportError:
+        return False
+    try:
+        info = evmole.contract_info("0x" + code.hex(), selectors=True,
+                                    arguments=True, state_mutability=True)
+    except Exception:
+        return False
+    by_sel = {f.selector.lower().removeprefix("0x"): f for f in info.functions}
+    for s in selectors:
+        f = by_sel.get(s.selector)
+        if f is not None:
+            s.arguments = f.arguments
+            s.state_mutability = f.state_mutability
+    return True
 
 
 def attribute_function(pc: int, selectors: List[SelectorEntry]) -> str:
@@ -390,6 +453,7 @@ def analyze(code: bytes) -> Analysis:
     sel_set = {s.selector for s in selectors}
     topics, error_sels = collect_hash_candidates(ops, sel_set)
     evm_floor, solc_floor = detect_floors(ops)
+    evmole_available = enrich_with_evmole(stripped, selectors)
 
     return Analysis(
         code=code,
@@ -404,4 +468,5 @@ def analyze(code: bytes) -> Analysis:
         optimizer_guess=detect_optimizer(stripped),
         via_ir_guess=detect_via_ir(ops),
         embedded_metadata=[r for r in metadata.find_embedded(code) if not (md.present and r[0] == md.start)],
+        evmole_available=evmole_available,
     )

@@ -13,6 +13,12 @@ license = { text = "MIT" }
 # util.py falls back to pysha3 / eth-hash if either is present instead.
 dependencies = ["pycryptodome>=3.19"]
 
+# evmole (https://github.com/cdump/evmole, MIT) enriches `analyze` with per-selector
+# argument types + state mutability (materially better than heimdall's ABI guess).
+# Optional: analyze degrades gracefully without it. `uv sync --extra evmole`.
+[project.optional-dependencies]
+evmole = ["evmole>=0.9"]
+
 [project.urls]
 Repository = "https://github.com/Decurity/verifyoor"
 

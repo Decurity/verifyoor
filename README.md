@@ -16,8 +16,10 @@ Two layers:
 
 1. **Deterministic toolkit** (`verifyoor …`) — all the mechanical work: CBOR
    metadata parsing, disassembly, dispatcher/selector analysis (with body-offset
-   tracing), openchain signature resolution (rehash-verified), heimdall
-   decompilation, an **intra-block IR lift** (per-basic-block symbolic stack
+   tracing), openchain signature resolution (rehash-verified), **evmole** argument-
+   type + state-mutability extraction (which also flags openchain **collisions** —
+   a resolved name whose decoded args disagree), heimdall decompilation, an
+   **intra-block IR lift** (per-basic-block symbolic stack
    execution into Yul-style statements — deterministic and complete for EVM
    bytecode, surfaced standalone via `lift` and inline in every diff region),
    **selector minting** (mint a function name for an exact selector when the real
@@ -40,6 +42,9 @@ still differs" legible even when a one-line change shifts every jump target.
 - [foundry](https://getfoundry.sh) (`cast`) and [heimdall](https://heimdall.rs) on `PATH`.
 - solc binaries under `~/.svm/<version>/solc-<version>` (or `solc-select`) for the
   versions you target; `verifyoor` auto-installs a missing one via `solc-select` when possible.
+- Optional: [evmole](https://github.com/cdump/evmole) (`uv sync --extra evmole`) —
+  enriches `analyze` with per-function argument types + state mutability and flags
+  selector collisions. Degrades gracefully if absent.
 
 ## Setup
 
@@ -130,14 +135,14 @@ immutable value slots (recovered and reported); masking library link placeholder
 
 ```sh
 uv run python tests/fixtures/generate_fixtures.py   # (re)generate fixtures
-uv run pytest                                       # 63 tests (2 need the external miner)
+uv run pytest                                       # 71 tests (a few gate on evmole / the external miner)
 ```
 
 The suite covers metadata parsing, the dispatcher walk (EQ/SUB forms, trampoline
 body-offset tracing), string extraction across all three solc encodings, the
 offset-stable diff, the intra-block IR lift (stack semantics, let/temp policy,
-block splitting), selector minting (both backends), immutable masking, viaIR
-detection, and end-to-end round-trips
+block splitting), selector minting (both backends), evmole enrichment + DB-name
+collision detection, immutable masking, viaIR detection, and end-to-end round-trips
 of fixtures exercising structs, mappings, events, custom errors, immutables,
 optimizer-on, viaIR, and solc 0.7.6. Compile-dependent tests need the matching
 solc binaries; network-dependent name resolution is cached (`--offline` to skip).

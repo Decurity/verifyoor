@@ -64,6 +64,7 @@ def cmd_analyze(args) -> int:
     out["resolved_events"] = {k: v for k, v in topics.items() if v}
     out["resolved_errors"] = {k: v for k, v in errors.items() if v}
     out["unresolved_selectors"] = [s.selector for s in a.selectors if not s.signature]
+    out["db_name_conflicts"] = [s.selector for s in a.selectors if s.db_name_conflict]
     print(json.dumps(out, indent=2))
 
     _eprint("== analyze ==")
@@ -72,9 +73,17 @@ def cmd_analyze(args) -> int:
         "solc (metadata): %s   evm floor: %s   optimizer: %s   viaIR: %s"
         % (md.solc, a.evm_floor, a.optimizer_guess, a.via_ir_guess)
     )
-    _eprint("functions:")
+    _eprint("functions:%s" % ("" if a.evmole_available else "  (install evmole for arg types + mutability)"))
     for s in a.selectors:
-        _eprint("  0x%s -> %s  (body @ 0x%x)" % (s.selector, s.signature or "??? UNRESOLVED", s.body_offset))
+        name = s.signature or "??? UNRESOLVED"
+        args = "(%s)" % s.arguments if s.arguments is not None else "(?)"
+        mut = "  %s" % s.state_mutability if s.state_mutability else ""
+        _eprint("  0x%s -> %s  args=%s%s  (body @ 0x%x)" % (s.selector, name, args, mut, s.body_offset))
+        if s.db_name_conflict:
+            _eprint("      ⚠ DB-name collision: resolved %s but evmole decodes %s — mint from evmole args, don't trust the name"
+                    % (s.signature, s.mint_signature()))
+        elif not s.signature and s.arguments is not None:
+            _eprint("      → unresolved; mint: verifyoor mine-selector 0x%s \"%s\"" % (s.selector, s.mint_signature()))
     if a.has_receive_or_fallback:
         _eprint("  + receive()/fallback() present")
     if a.strings:
