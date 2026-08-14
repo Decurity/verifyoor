@@ -27,7 +27,9 @@ Two layers:
    name is unrecoverable — a collision or a custom name), pinned-solc compilation
    with a settings sweep, masked byte-exact comparison, and an **offset-stable
    normalized-disassembly diff** that attributes each remaining divergence to a
-   specific function.
+   specific function via **context-sensitive CFG** analysis (each function's
+   context-matched reachable blocks; a divergence in genuinely shared codegen reads
+   `shared helper` instead of being misattributed to a neighbor).
 2. **Claude Code skill** (`.claude/skills/verify/SKILL.md`, invoke as `/verify
    <network> <address>`) — Claude is the reconstruction engine, authoring the
    Solidity and refining it against the toolkit's diff feedback in an
@@ -138,15 +140,15 @@ immutable value slots (recovered and reported); masking library link placeholder
 
 ```sh
 uv run python tests/fixtures/generate_fixtures.py   # (re)generate fixtures
-uv run pytest                                       # 78 tests (2 gate on the external miner)
+uv run pytest                                       # 82 tests (2 gate on the external miner)
 ```
 
 The suite covers metadata parsing, the dispatcher walk (EQ/SUB forms, trampoline
 body-offset tracing), string extraction across all three solc encodings, the
 offset-stable diff, the intra-block IR lift (stack semantics, let/temp policy,
-block splitting) with CFG edge resolution, selector minting (both backends), evmole
-enrichment (arg types, mutability, storage layout), immutable masking, viaIR
-detection, and round-trips
+block splitting) with CFG edge resolution, context-sensitive CFG attribution,
+selector minting (both backends), evmole enrichment (arg types, mutability, storage
+layout), immutable masking, viaIR detection, and round-trips
 of fixtures exercising structs, mappings, events, custom errors, immutables,
 optimizer-on, viaIR, and solc 0.7.6. Compile-dependent tests need the matching
 solc binaries; network-dependent name resolution is cached (`--offline` to skip).

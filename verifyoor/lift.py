@@ -418,7 +418,12 @@ class Lifter:
         return out
 
     def listing(self, selectors=None) -> List[str]:
-        """Full lifted listing, grouped under function headings by body offset."""
+        """Full lifted listing, grouped under function headings by body offset.
+
+        Uses the offset heuristic (not context-sensitive attribution) on purpose:
+        it keeps each function's code as one contiguous, readable section. The
+        context-sensitive attribution belongs in the diff, where per-region accuracy
+        matters more than contiguity."""
         from .analyze import attribute_function
 
         selectors = selectors or []

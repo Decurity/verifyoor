@@ -13,7 +13,7 @@ import difflib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from .analyze import SelectorEntry, attribute_function
+from .analyze import SelectorEntry
 from .disasm import Op, disassemble, jumpdests
 from .lift import Lifter
 
@@ -100,21 +100,26 @@ def diff(target_code: bytes, candidate_code: bytes, selectors: Optional[List[Sel
     regions: List[RegionDiff] = []
     t_lifter: Optional[Lifter] = None
     c_lifter: Optional[Lifter] = None
+    attributor = None
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             continue
-        if lift_ir and t_lifter is None:
-            from .cfg import Cfg
-            # resolve dynamic-jump edges on the target (expected) side — the
-            # authoritative reference the model reads on a mismatch
-            t_lifter = Lifter(t_ops, cfg=Cfg.from_code(target_code))
-            c_lifter = Lifter(c_ops)
+        if attributor is None:
+            from .cfg import Attributor, Cfg
+            # one CFG of the target drives edge resolution and context-sensitive
+            # attribution: a divergence in genuinely shared code reads "shared helper",
+            # while function-specific codegen stays attributed to its function
+            t_cfg = Cfg.from_code(target_code)
+            attributor = Attributor(t_cfg, selectors)
+            if lift_ir:
+                t_lifter = Lifter(t_ops, cfg=t_cfg)
+                c_lifter = Lifter(c_ops)
         pc = t_pcs[i1] if i1 < len(t_pcs) else (t_pcs[-1] if t_pcs else 0)
         regions.append(
             RegionDiff(
                 tag=tag,
                 target_pc=pc,
-                function=attribute_function(pc, selectors),
+                function=attributor.attribute(pc),
                 expected=t_tokens[i1:i2],
                 got=c_tokens[j1:j2],
                 expected_ir=(t_lifter.lift_range(t_ops[i1].pc, t_ops[i2 - 1].pc)
