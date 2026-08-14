@@ -14,29 +14,31 @@ is unrecoverable from bytecode).
 
 Two layers:
 
-1. **Deterministic toolkit** (`verifyoor …`) — all the mechanical work: CBOR
-   metadata parsing, disassembly, **evmole**-primary selector / argument-type /
-   state-mutability / **storage-layout** extraction with trampoline body-offset
-   tracing (a built-in dispatcher walk is the fallback), **Sourcify** 4byte resolution
-   (rehash-verified, verified-contract names ranked first),
-   an **intra-block IR lift** (per-basic-block symbolic stack execution into
-   Yul-style statements — deterministic and complete for EVM bytecode — with
-   inter-block edges resolved from **evmole's CFG**, incl. context-sensitive dynamic
-   jumps; surfaced standalone via `lift` and inline in every diff region),
-   **selector minting** (mint a function name for an exact selector when the real
-   name is unrecoverable — a collision or a custom name), pinned-solc compilation
-   with a settings sweep, a **source-variant sweep** (`sweep` — expand a templated
-   candidate's `<<< a ||| b >>>` markers across all variants × settings, ranked by
-   diff-region count, until byte-exact), a **library-version sweep**
-   (`identify-library` — for contracts built on a known OSS library like
-   OpenZeppelin, sweep the library's published versions × settings, scored by
-   basic-block fingerprint overlap against the target, to recover large verbatim
-   chunks and pin the compiler settings before hand-authoring the rest), masked
-   byte-exact comparison, and an **offset-stable
-   normalized-disassembly diff** that attributes each remaining divergence to a
-   specific function via **context-sensitive CFG** analysis (each function's
-   context-matched reachable blocks; a divergence in genuinely shared codegen reads
-   `shared helper` instead of being misattributed to a neighbor).
+1. **Deterministic toolkit** (`verifyoor …`) — all the mechanical work, as a pipeline:
+   - **Parse & analyze** — CBOR metadata; dispatcher walk with trampoline
+     body-offset tracing; **evmole**-primary selector / argument-type /
+     state-mutability / **storage-layout** extraction (the dispatcher walk is the
+     fallback); **Sourcify** 4byte name resolution (rehash-verified,
+     verified-contract names ranked first).
+   - **Lift** — an intra-block IR lift: per-basic-block symbolic stack execution
+     into Yul-style statements, deterministic and complete for EVM bytecode, with
+     inter-block edges (including context-sensitive dynamic jumps) resolved from
+     **evmole's CFG**. Surfaced standalone via `lift` and inline in every diff region.
+   - **Compile & compare** — pinned-solc compilation with a settings sweep, masked
+     byte-exact comparison.
+   - **Diff** — an offset-stable normalized-disassembly diff; each divergence is
+     attributed to a specific function via **context-sensitive CFG** analysis (a
+     divergence in genuinely shared codegen reads `shared helper` instead of being
+     misattributed to a neighboring function).
+   - **Brute-force the last mile** — a source-variant sweep (`sweep`: expand a
+     templated candidate's `<<< a ||| b >>>` markers across all variants ×
+     settings, ranked by diff-region count, until byte-exact) and a
+     library-version sweep (`identify-library`: for contracts built on a known OSS
+     library like OpenZeppelin, sweep its published versions × settings scored by
+     basic-block fingerprint overlap against the target, to recover large verbatim
+     chunks and pin the compiler settings before hand-authoring the rest).
+   - **Selector minting** — mint a function name for an exact selector when the
+     real name is unrecoverable (a collision or a custom name).
 2. **Claude Code skill** (`.claude/skills/verify/SKILL.md`, invoke as `/verify
    <network> <address>`) — Claude is the reconstruction engine, authoring the
    Solidity and refining it against the toolkit's diff feedback in an
