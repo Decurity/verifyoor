@@ -3,7 +3,7 @@
 Network aliases resolve to keyless public RPC endpoints; a full http(s) URL may be
 passed in place of an alias, and VERIFYOOR_RPC_<NETWORK> / --rpc-url override.
 Fetched code is cached under ~/.cache/verifyoor/bytecode so the skill's repeated
-analyze/decompile/verify calls on one address hit the network only once.
+analyze/lift/verify calls on one address hit the network only once.
 """
 from __future__ import annotations
 

@@ -104,7 +104,10 @@ def diff(target_code: bytes, candidate_code: bytes, selectors: Optional[List[Sel
         if tag == "equal":
             continue
         if lift_ir and t_lifter is None:
-            t_lifter = Lifter(t_ops)
+            from .cfg import Cfg
+            # resolve dynamic-jump edges on the target (expected) side — the
+            # authoritative reference the model reads on a mismatch
+            t_lifter = Lifter(t_ops, cfg=Cfg.from_code(target_code))
             c_lifter = Lifter(c_ops)
         pc = t_pcs[i1] if i1 < len(t_pcs) else (t_pcs[-1] if t_pcs else 0)
         regions.append(

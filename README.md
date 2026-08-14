@@ -15,11 +15,14 @@ is unrecoverable from bytecode).
 Two layers:
 
 1. **Deterministic toolkit** (`verifyoor …`) — all the mechanical work: CBOR
-   metadata parsing, disassembly, dispatcher/selector analysis (with body-offset
-   tracing), openchain signature resolution (rehash-verified), heimdall
-   decompilation, an **intra-block IR lift** (per-basic-block symbolic stack
-   execution into Yul-style statements — deterministic and complete for EVM
-   bytecode, surfaced standalone via `lift` and inline in every diff region),
+   metadata parsing, disassembly, **evmole**-primary selector / argument-type /
+   state-mutability / **storage-layout** extraction with trampoline body-offset
+   tracing (a built-in dispatcher walk is the fallback), **Sourcify** 4byte resolution
+   (rehash-verified, verified-contract names ranked first),
+   an **intra-block IR lift** (per-basic-block symbolic stack execution into
+   Yul-style statements — deterministic and complete for EVM bytecode — with
+   inter-block edges resolved from **evmole's CFG**, incl. context-sensitive dynamic
+   jumps; surfaced standalone via `lift` and inline in every diff region),
    **selector minting** (mint a function name for an exact selector when the real
    name is unrecoverable — a collision or a custom name), pinned-solc compilation
    with a settings sweep, masked byte-exact comparison, and an **offset-stable
@@ -37,14 +40,19 @@ still differs" legible even when a one-line change shifts every jump target.
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/) (manages the Python environment).
-- [foundry](https://getfoundry.sh) (`cast`) and [heimdall](https://heimdall.rs) on `PATH`.
+- [foundry](https://getfoundry.sh) (`cast`) on `PATH`.
 - solc binaries under `~/.svm/<version>/solc-<version>` (or `solc-select`) for the
   versions you target; `verifyoor` auto-installs a missing one via `solc-select` when possible.
+
+[evmole](https://github.com/cdump/evmole) is a core Python dependency (installed by
+`uv sync`) — it's the primary source for selectors, argument types, and state
+mutability in `analyze`. If it errors on a given input, analysis falls back to the
+built-in dispatcher walk.
 
 ## Setup
 
 ```sh
-uv sync          # create the .venv and install deps (pytest, pycryptodome)
+uv sync          # create the .venv and install deps (pytest, pycryptodome, evmole)
 ```
 
 Everything then runs through `uv run` (no manual venv activation needed). The
@@ -58,7 +66,6 @@ single local hex file / hex string:
 
 ```sh
 uv run verifyoor analyze   ethereum 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
-uv run verifyoor decompile <network> <address> --out D
 uv run verifyoor lift      <network> <address> --out runs/<name>/lift.txt
 uv run verifyoor mine-selector 0x2247831f "(address[],uint256[])"
 uv run verifyoor verify    <src.sol> <network> <address> --sweep --out runs/<name>
@@ -100,8 +107,9 @@ only the 4-byte selector `keccak(name+argtypes)[:4]`. So when a function's real
 name is unrecoverable (a custom name absent from signature DBs, or a selector
 **collision** where the DB resolves the wrong preimage — e.g. a 2-array batch
 function that happens to share `transfer`'s `0xa9059cbb`), you don't need the
-name. Read the **arg types** off the `lift` IR (they drive the body's codegen and
-must be right), then mint any name that hashes to the selector:
+name. Take the **arg types** from `analyze` (evmole; they drive the body's codegen
+and must be right — cross-check the `lift` IR when in doubt), then mint any name
+that hashes to the selector:
 
 ```sh
 uv run verifyoor mine-selector 0x2247831f "(address[],uint256[])"
@@ -130,14 +138,15 @@ immutable value slots (recovered and reported); masking library link placeholder
 
 ```sh
 uv run python tests/fixtures/generate_fixtures.py   # (re)generate fixtures
-uv run pytest                                       # 63 tests (2 need the external miner)
+uv run pytest                                       # 78 tests (2 gate on the external miner)
 ```
 
 The suite covers metadata parsing, the dispatcher walk (EQ/SUB forms, trampoline
 body-offset tracing), string extraction across all three solc encodings, the
 offset-stable diff, the intra-block IR lift (stack semantics, let/temp policy,
-block splitting), selector minting (both backends), immutable masking, viaIR
-detection, and end-to-end round-trips
+block splitting) with CFG edge resolution, selector minting (both backends), evmole
+enrichment (arg types, mutability, storage layout), immutable masking, viaIR
+detection, and round-trips
 of fixtures exercising structs, mappings, events, custom errors, immutables,
 optimizer-on, viaIR, and solc 0.7.6. Compile-dependent tests need the matching
 solc binaries; network-dependent name resolution is cached (`--offline` to skip).

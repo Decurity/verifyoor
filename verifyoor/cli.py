@@ -1,4 +1,4 @@
-"""verifyoor CLI: analyze | decompile | lift | verify | submit.
+"""verifyoor CLI: analyze | lift | mine-selector | verify | submit.
 
 The deterministic toolkit Claude Code drives while reconstructing source. JSON on
 stdout for machine consumption; a human-readable summary on stderr. `verify` exits
@@ -16,7 +16,7 @@ from . import metadata
 from .analyze import analyze
 from .compare import Comparison, compare
 from .compile import CompileResult, Settings, compile_standard, settings_sweep
-from .decompile import decompile
+from .cfg import Cfg
 from .disasm import disassemble
 from .fetch import fetch_code
 from .lift import Lifter
@@ -72,36 +72,28 @@ def cmd_analyze(args) -> int:
         "solc (metadata): %s   evm floor: %s   optimizer: %s   viaIR: %s"
         % (md.solc, a.evm_floor, a.optimizer_guess, a.via_ir_guess)
     )
-    _eprint("functions:")
+    _eprint("functions:%s" % ("" if a.evmole_available else "  (evmole unavailable for this bytecode — fell back to the dispatcher walk)"))
     for s in a.selectors:
-        _eprint("  0x%s -> %s  (body @ 0x%x)" % (s.selector, s.signature or "??? UNRESOLVED", s.body_offset))
+        name = s.signature or "??? UNRESOLVED"
+        args = "(%s)" % s.arguments if s.arguments is not None else "(?)"
+        mut = "  %s" % s.state_mutability if s.state_mutability else ""
+        _eprint("  0x%s -> %s  args=%s%s  (body @ 0x%x)" % (s.selector, name, args, mut, s.body_offset))
+        if not s.signature and s.arguments is not None:
+            _eprint("      → unresolved; mint: verifyoor mine-selector 0x%s \"%s\"" % (s.selector, s.mint_signature()))
     if a.has_receive_or_fallback:
         _eprint("  + receive()/fallback() present")
+    if a.storage:
+        _eprint("storage layout (declare state vars in this order):")
+        for v in a.storage:
+            at = "slot %d" % v.slot + (" @byte %d" % v.offset if v.offset else "")
+            writers = ("  written by %s" % ", ".join("0x" + w for w in v.writes)) if v.writes else "  (read-only)"
+            _eprint("  %-8s %s%s" % (at, v.type, writers))
     if a.strings:
         _eprint("strings: %s" % ", ".join(repr(x) for x in a.strings))
     for h, names in out["resolved_events"].items():
         _eprint("event topic 0x%s… -> %s" % (h[:12], names))
     for h, names in out["resolved_errors"].items():
         _eprint("error 0x%s -> %s" % (h, names))
-    return 0
-
-
-def cmd_decompile(args) -> int:
-    code, _label = _resolve_source(args.target, args.rpc_url, args.no_cache)
-    outdir = args.out or os.path.join("runs", "decompile")
-    code_hex = "0x" + code.hex()
-    d = decompile(code_hex, outdir, timeout=args.timeout, skip_resolving=args.skip_resolving)
-    if not d.ok:
-        _eprint("decompile failed: %s" % d.error)
-        print(json.dumps({"ok": False, "error": d.error}))
-        return 1
-    print(json.dumps({"ok": True, "outdir": d.outdir, "signatures": d.resolved_signatures}))
-    _eprint("== heimdall decompilation (%s) ==" % d.outdir)
-    if d.resolved_signatures:
-        _eprint("signatures: %s" % ", ".join(d.resolved_signatures))
-    if d.solidity:
-        _eprint("---- decompiled.sol ----")
-        _eprint(d.solidity)
     return 0
 
 
@@ -128,20 +120,23 @@ def cmd_lift(args) -> int:
     _resolve_analysis(a, use_network=not args.offline)
     md = a.metadata
     stripped = code[: md.start] if md.present else code
-    lifter = Lifter(disassemble(stripped))
+    cfg = Cfg.from_code(stripped)
+    lifter = Lifter(disassemble(stripped), cfg=cfg)
     lines = lifter.listing(selectors=a.selectors)
     text = "\n".join(lines) + "\n"
     if args.out:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
         with open(args.out, "w") as f:
             f.write(text)
-        _eprint("== lift == %d line(s) -> %s" % (len(lines), args.out))
+        _eprint("== lift == %d line(s)%s -> %s"
+                % (len(lines), " (CFG edges resolved)" if cfg else "", args.out))
     else:
         _eprint("== lift ==")
         _eprint(text)
     print(json.dumps({
         "ok": True,
         "lines": len(lines),
+        "cfg": cfg is not None,
         "out": args.out,
         "functions": [s.signature or ("selector 0x%s" % s.selector) for s in a.selectors],
     }))
@@ -345,17 +340,8 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("target", nargs="+", help=src_help)
     pa.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
     pa.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
-    pa.add_argument("--offline", action="store_true", help="skip openchain network lookups")
+    pa.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
     pa.set_defaults(func=cmd_analyze)
-
-    pd = sub.add_parser("decompile", help="heimdall decompile wrapper")
-    pd.add_argument("target", nargs="+", help=src_help)
-    pd.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
-    pd.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
-    pd.add_argument("--out", help="output directory")
-    pd.add_argument("--timeout", type=int, default=120)
-    pd.add_argument("--skip-resolving", action="store_true")
-    pd.set_defaults(func=cmd_decompile)
 
     pm = sub.add_parser("mine-selector", help="mint a func name whose selector matches exactly (for unrecoverable names)")
     pm.add_argument("selector", help="target 4-byte selector (0x + 8 hex, or 8 hex)")
@@ -369,7 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("target", nargs="+", help=src_help)
     pl.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
     pl.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
-    pl.add_argument("--offline", action="store_true", help="skip openchain network lookups")
+    pl.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
     pl.add_argument("--out", help="write the listing to a file (else stderr)")
     pl.set_defaults(func=cmd_lift)
 
@@ -385,7 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--via-ir", action="store_true")
     pv.add_argument("--sweep", action="store_true", help="sweep optimizer/evm/viaIR until match")
     pv.add_argument("--out", help="artifacts output directory (on match)")
-    pv.add_argument("--offline", action="store_true", help="skip openchain network lookups")
+    pv.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
     pv.set_defaults(func=cmd_verify)
 
     ps = sub.add_parser("submit", help="submit a verified run dir to Etherscan/Sourcify (standard-json)")
