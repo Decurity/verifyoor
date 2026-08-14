@@ -73,7 +73,7 @@ def cmd_analyze(args) -> int:
         "solc (metadata): %s   evm floor: %s   optimizer: %s   viaIR: %s"
         % (md.solc, a.evm_floor, a.optimizer_guess, a.via_ir_guess)
     )
-    _eprint("functions:%s" % ("" if a.evmole_available else "  (install evmole for arg types + mutability)"))
+    _eprint("functions:%s" % ("" if a.evmole_available else "  (evmole unavailable for this bytecode — fell back to the dispatcher walk)"))
     for s in a.selectors:
         name = s.signature or "??? UNRESOLVED"
         args = "(%s)" % s.arguments if s.arguments is not None else "(?)"

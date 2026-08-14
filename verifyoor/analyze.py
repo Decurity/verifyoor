@@ -90,30 +90,51 @@ class Analysis:
         }
 
 
-def enrich_with_evmole(code: bytes, selectors: List[SelectorEntry]) -> bool:
-    """Fill each selector's `arguments` + `state_mutability` from evmole.
+def _evmole_functions(code: bytes):
+    """evmole's decoded functions for the runtime code, or None if unavailable.
 
-    evmole (https://github.com/cdump/evmole, MIT) recovers argument types and
-    mutability from bytecode with materially better accuracy than heimdall's ABI
-    guess. Optional dependency: if it isn't importable we leave the fields None and
-    return False, so analysis degrades gracefully. Matched to our dispatcher entries
-    by selector, so our trampoline-resolved body offsets are preserved."""
+    evmole (https://github.com/cdump/evmole, MIT) is the **primary** source for the
+    selector set, argument types, and state mutability — materially more accurate
+    than a hand-rolled dispatcher walk + ABI guess, in reproducible benchmarks.
+    It's a required dependency; the import/error guard is a robustness net so a bad
+    bytecode input (or a broken install) degrades to the fallback walk rather than
+    crashing analysis."""
     try:
         import evmole
     except ImportError:
-        return False
+        return None
     try:
         info = evmole.contract_info("0x" + code.hex(), selectors=True,
                                     arguments=True, state_mutability=True)
     except Exception:
-        return False
-    by_sel = {f.selector.lower().removeprefix("0x"): f for f in info.functions}
-    for s in selectors:
-        f = by_sel.get(s.selector)
-        if f is not None:
-            s.arguments = f.arguments
-            s.state_mutability = f.state_mutability
-    return True
+        return None
+    return info.functions
+
+
+def build_selectors(ops: List[Op], code: bytes) -> Tuple[List[SelectorEntry], bool]:
+    """Selector entries, favoring evmole; the dispatcher walk is the fallback/union.
+
+    evmole supplies the selector set, arg types, and mutability. Its dispatcher-entry
+    offset is fed through `_resolve_body`, so the trampoline-resolved body offset
+    (used for diff attribution) is identical to what `walk_dispatcher` produced —
+    verified across all fixtures. `walk_dispatcher` then fills any selector evmole
+    missed, and is the sole source when evmole is unavailable. Returns
+    (entries sorted by body offset, evmole_used)."""
+    by_pc = {op.pc: i for i, op in enumerate(ops)}
+    entries: Dict[str, SelectorEntry] = {}
+    fns = _evmole_functions(code)
+    if fns is not None:
+        for f in fns:
+            sel = f.selector.lower().removeprefix("0x")
+            entries[sel] = SelectorEntry(
+                sel,
+                _resolve_body(f.bytecode_offset, ops, by_pc),
+                arguments=f.arguments,
+                state_mutability=f.state_mutability,
+            )
+    for s in walk_dispatcher(ops):  # union: adds evmole misses / sole source on fallback
+        entries.setdefault(s.selector, s)
+    return sorted(entries.values(), key=lambda e: e.body_offset), fns is not None
 
 
 def attribute_function(pc: int, selectors: List[SelectorEntry]) -> str:
@@ -449,11 +470,10 @@ def analyze(code: bytes) -> Analysis:
     stripped = code[: md.start] if md.present else code
     ops = disassemble(stripped)
 
-    selectors = walk_dispatcher(ops)
+    selectors, evmole_available = build_selectors(ops, stripped)
     sel_set = {s.selector for s in selectors}
     topics, error_sels = collect_hash_candidates(ops, sel_set)
     evm_floor, solc_floor = detect_floors(ops)
-    evmole_available = enrich_with_evmole(stripped, selectors)
 
     return Analysis(
         code=code,

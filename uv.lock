@@ -250,12 +250,8 @@ name = "verifyoor"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "pycryptodome" },
-]
-
-[package.optional-dependencies]
-evmole = [
     { name = "evmole" },
+    { name = "pycryptodome" },
 ]
 
 [package.dev-dependencies]
@@ -266,7 +262,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "evmole", marker = "extra == 'evmole'", specifier = ">=0.9" },
+    { name = "evmole", specifier = ">=0.9" },
     { name = "pycryptodome", specifier = ">=3.19" },
 ]
 
