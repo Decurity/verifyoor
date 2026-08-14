@@ -158,6 +158,50 @@ for byte-width detail. Interpretation guide (token-level signals):
 Edit `candidate.sol` (save iterations as `candidate_2.sol`, … for debugging) and
 return to step 4. The diff shrinks region-by-region as you converge.
 
+### 5b. Sweep source variants (when a region has a few equivalent codegens)
+When a divergence comes down to *how* to write something — inline vs a factored
+`private` helper, assembly `sload(SLOT)` vs `StorageSlot.getAddressSlot(SLOT).value`,
+a raw `sstore` vs a high-level assignment, an interface call vs a low-level
+`staticcall` — don't hand-test each. Mark the choices in the source with
+`<<< optionA ||| optionB >>>` and let the toolkit compile the whole grid
+(variants × settings), stopping at the first byte-exact match:
+```
+uv run verifyoor sweep runs/<name>/template.sol <TARGET> --out runs/<name>
+```
+It ranks non-matches by normalized-diff **region count** (the true "closeness",
+since a length mismatch zeroes the byte diff) and writes the closest variant to
+`closest.sol` for the next round. Bound the blow-up with `--max-variants`; pin
+`--optimizer on:RUNS` (etc.) once settings are known to keep it fast. Reach for
+this on the last mile — the handful of equivalent source shapes for one stubborn
+region — not for large structural rewrites.
+
+### 5c. Identify an embedded library (large contracts using OpenZeppelin etc.)
+When a function's shape screams a known library (Ownable2Step, ReentrancyGuard,
+ERC20, AccessControl, ...), don't hand-author it and hope. Write a small probe
+that imports it (like `candidate.sol`, but trivial):
+```solidity
+// probe.sol
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
+contract Probe is Ownable2Step { constructor() Ownable(msg.sender) {} }
+```
+then sweep the library's published versions × compiler settings, scored by
+**basic-block fingerprint overlap** against the target (not selector-body
+comparison — solc's optimizer gives a library function a different internal-call
+shape depending on the whole program, so an isolated probe's function bodies
+won't equal the target's; but a block's own content is caller-independent, so
+matching library blocks show up verbatim regardless of the surrounding contract):
+```
+uv run verifyoor identify-library probe.sol <TARGET> \
+  --package @openzeppelin/contracts --path access/Ownable2Step.sol --contract Probe
+```
+Read the report: high match fraction (>50%) confirms the library + version range
+(often several patch versions are byte-identical for one file — reported as a
+single result) and **pins the optimizer settings** for the whole contract, which
+narrows every other function's diff loop too. `--versions` omitted fetches the
+npm registry's version list automatically. This is confirmatory/settings-pinning,
+not a source-emitting step — once confirmed, cross-check the actual functions you
+authored against the same-version library source directly.
+
 ### 6. On match
 `verify` writes `source.sol`, `settings.json`, `standard-input.json`, and
 `report.{json,md}` to `runs/<name>/`. Confirm and summarize for the user:

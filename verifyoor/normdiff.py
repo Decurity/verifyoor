@@ -18,7 +18,7 @@ from .disasm import Op, disassemble, jumpdests
 from .lift import Lifter
 
 
-def _normalize_tokens(code: bytes) -> Tuple[List[str], List[Op]]:
+def normalize_tokens(code: bytes) -> Tuple[List[str], List[Op]]:
     """Tokenize with jump targets abstracted for offset stability.
 
     A PUSH whose immediate is a valid JUMPDEST collapses to a single opaque
@@ -90,8 +90,8 @@ class NormDiff:
 def diff(target_code: bytes, candidate_code: bytes, selectors: Optional[List[SelectorEntry]] = None,
          lift_ir: bool = True) -> NormDiff:
     selectors = selectors or []
-    t_tokens, t_ops = _normalize_tokens(target_code)
-    c_tokens, c_ops = _normalize_tokens(candidate_code)
+    t_tokens, t_ops = normalize_tokens(target_code)
+    c_tokens, c_ops = normalize_tokens(candidate_code)
 
     # pc of each target token, to attribute regions to functions
     t_pcs = [op.pc for op in t_ops]
