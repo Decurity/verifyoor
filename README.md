@@ -17,9 +17,14 @@ Two layers:
 1. **Deterministic toolkit** (`verifyoor …`) — all the mechanical work: CBOR
    metadata parsing, disassembly, dispatcher/selector analysis (with body-offset
    tracing), openchain signature resolution (rehash-verified), heimdall
-   decompilation, pinned-solc compilation with a settings sweep, masked byte-exact
-   comparison, and an **offset-stable normalized-disassembly diff** that attributes
-   each remaining divergence to a specific function.
+   decompilation, an **intra-block IR lift** (per-basic-block symbolic stack
+   execution into Yul-style statements — deterministic and complete for EVM
+   bytecode, surfaced standalone via `lift` and inline in every diff region),
+   **selector minting** (mint a function name for an exact selector when the real
+   name is unrecoverable — a collision or a custom name), pinned-solc compilation
+   with a settings sweep, masked byte-exact comparison, and an **offset-stable
+   normalized-disassembly diff** that attributes each remaining divergence to a
+   specific function.
 2. **Claude Code skill** (`.claude/skills/verify/SKILL.md`, invoke as `/verify
    <network> <address>`) — Claude is the reconstruction engine, authoring the
    Solidity and refining it against the toolkit's diff feedback in an
@@ -54,6 +59,8 @@ single local hex file / hex string:
 ```sh
 uv run verifyoor analyze   ethereum 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
 uv run verifyoor decompile <network> <address> --out D
+uv run verifyoor lift      <network> <address> --out runs/<name>/lift.txt
+uv run verifyoor mine-selector 0x2247831f "(address[],uint256[])"
 uv run verifyoor verify    <src.sol> <network> <address> --sweep --out runs/<name>
 
 # local bytecode works in place of <network> <address>:
@@ -86,6 +93,33 @@ Submits that standard-json to Etherscan (`$ETHERSCAN_API_KEY` or `--api-key`)
 and/or Sourcify (`--verifier etherscan|sourcify|both`) and polls to completion.
 Pass `--constructor-args <hex>` if the contract has a constructor with arguments.
 
+## Selector mining
+
+A function's name never appears in runtime bytecode — solc's dispatcher carries
+only the 4-byte selector `keccak(name+argtypes)[:4]`. So when a function's real
+name is unrecoverable (a custom name absent from signature DBs, or a selector
+**collision** where the DB resolves the wrong preimage — e.g. a 2-array batch
+function that happens to share `transfer`'s `0xa9059cbb`), you don't need the
+name. Read the **arg types** off the `lift` IR (they drive the body's codegen and
+must be right), then mint any name that hashes to the selector:
+
+```sh
+uv run verifyoor mine-selector 0x2247831f "(address[],uint256[])"
+# -> func_2247831f_<n>(address[],uint256[])   (selector == 0x2247831f, re-verified)
+```
+
+The minted `func_<selector>_<n>` name is cosmetic; only the selector lands in
+bytecode, so the compiled runtime is byte-identical. Mining is a ~2³² keccak
+search with two backends (auto-selected; every result re-verified with keccak):
+
+- **external** (fast) — [Vectorized's `function-selector-miner`](https://github.com/Vectorized/function-selector-miner)
+  (MIT; Rust, AVX2 + multithread), sub-minute on an x86+AVX2 host. Build it
+  (`cargo build --release`) and either put `function-selector-miner` on `PATH` or
+  point `VERIFYOOR_SELECTOR_MINER` at the binary. On non-AVX2 hosts (e.g. Apple
+  Silicon) it falls back to a scalar path, ~on par with the Python backend.
+- **python** (fallback) — pure-Python multiprocessing, no build step; always
+  present. Force it with `--python`.
+
 ## Match standard
 
 Byte-identical after: stripping trailing CBOR metadata from both sides; masking
@@ -96,12 +130,14 @@ immutable value slots (recovered and reported); masking library link placeholder
 
 ```sh
 uv run python tests/fixtures/generate_fixtures.py   # (re)generate fixtures
-uv run pytest                                       # 37 tests
+uv run pytest                                       # 63 tests (2 need the external miner)
 ```
 
 The suite covers metadata parsing, the dispatcher walk (EQ/SUB forms, trampoline
 body-offset tracing), string extraction across all three solc encodings, the
-offset-stable diff, immutable masking, viaIR detection, and end-to-end round-trips
+offset-stable diff, the intra-block IR lift (stack semantics, let/temp policy,
+block splitting), selector minting (both backends), immutable masking, viaIR
+detection, and end-to-end round-trips
 of fixtures exercising structs, mappings, events, custom errors, immutables,
 optimizer-on, viaIR, and solc 0.7.6. Compile-dependent tests need the matching
 solc binaries; network-dependent name resolution is cached (`--offline` to skip).

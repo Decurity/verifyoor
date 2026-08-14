@@ -13,8 +13,9 @@ import difflib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from .analyze import SelectorEntry
+from .analyze import SelectorEntry, attribute_function
 from .disasm import Op, disassemble, jumpdests
+from .lift import Lifter
 
 
 def _normalize_tokens(code: bytes) -> Tuple[List[str], List[Op]]:
@@ -47,12 +48,23 @@ class RegionDiff:
     function: str
     expected: List[str] = field(default_factory=list)  # target (on-chain) side
     got: List[str] = field(default_factory=list)  # candidate side
+    expected_ir: List[str] = field(default_factory=list)  # lifted enclosing block(s)
+    got_ir: List[str] = field(default_factory=list)
 
     def render(self, ctx: int = 8) -> str:
         exp = self.expected[:ctx] + (["..."] if len(self.expected) > ctx else [])
         got = self.got[:ctx] + (["..."] if len(self.got) > ctx else [])
         head = "[%s @ 0x%x in %s]" % (self.tag, self.target_pc, self.function)
-        return "%s\n    expected: %s\n    got:      %s" % (head, " ; ".join(exp) or "(none)", " ; ".join(got) or "(none)")
+        parts = [head,
+                 "    expected: %s" % (" ; ".join(exp) or "(none)"),
+                 "    got:      %s" % (" ; ".join(got) or "(none)")]
+        if self.expected_ir:
+            parts.append("    expected IR (target block):")
+            parts.extend("      " + l for l in self.expected_ir)
+        if self.got_ir:
+            parts.append("    got IR (candidate block):")
+            parts.extend("      " + l for l in self.got_ir)
+        return "\n".join(parts)
 
 
 @dataclass
@@ -75,42 +87,37 @@ class NormDiff:
         return "\n".join(lines)
 
 
-def _attribute(target_pc: int, ops: List[Op], selectors: List[SelectorEntry]) -> str:
-    if not selectors:
-        return "code@0x%x" % target_pc
-    labeled = sorted(selectors, key=lambda s: s.body_offset)
-    name = None
-    for s in labeled:
-        if s.body_offset <= target_pc:
-            name = s.signature or ("selector 0x%s" % s.selector)
-        else:
-            break
-    if name is None:
-        return "dispatcher/prologue"
-    return name
-
-
-def diff(target_code: bytes, candidate_code: bytes, selectors: Optional[List[SelectorEntry]] = None) -> NormDiff:
+def diff(target_code: bytes, candidate_code: bytes, selectors: Optional[List[SelectorEntry]] = None,
+         lift_ir: bool = True) -> NormDiff:
     selectors = selectors or []
     t_tokens, t_ops = _normalize_tokens(target_code)
-    c_tokens, _ = _normalize_tokens(candidate_code)
+    c_tokens, c_ops = _normalize_tokens(candidate_code)
 
     # pc of each target token, to attribute regions to functions
     t_pcs = [op.pc for op in t_ops]
 
     sm = difflib.SequenceMatcher(a=t_tokens, b=c_tokens, autojunk=False)
     regions: List[RegionDiff] = []
+    t_lifter: Optional[Lifter] = None
+    c_lifter: Optional[Lifter] = None
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             continue
+        if lift_ir and t_lifter is None:
+            t_lifter = Lifter(t_ops)
+            c_lifter = Lifter(c_ops)
         pc = t_pcs[i1] if i1 < len(t_pcs) else (t_pcs[-1] if t_pcs else 0)
         regions.append(
             RegionDiff(
                 tag=tag,
                 target_pc=pc,
-                function=_attribute(pc, t_ops, selectors),
+                function=attribute_function(pc, selectors),
                 expected=t_tokens[i1:i2],
                 got=c_tokens[j1:j2],
+                expected_ir=(t_lifter.lift_range(t_ops[i1].pc, t_ops[i2 - 1].pc)
+                             if lift_ir and i2 > i1 else []),
+                got_ir=(c_lifter.lift_range(c_ops[j1].pc, c_ops[j2 - 1].pc)
+                        if lift_ir and j2 > j1 else []),
             )
         )
     return NormDiff(

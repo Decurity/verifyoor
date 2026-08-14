@@ -1,4 +1,4 @@
-"""verifyoor CLI: analyze | decompile | verify.
+"""verifyoor CLI: analyze | decompile | lift | verify | submit.
 
 The deterministic toolkit Claude Code drives while reconstructing source. JSON on
 stdout for machine consumption; a human-readable summary on stderr. `verify` exits
@@ -17,7 +17,9 @@ from .analyze import analyze
 from .compare import Comparison, compare
 from .compile import CompileResult, Settings, compile_standard, settings_sweep
 from .decompile import decompile
+from .disasm import disassemble
 from .fetch import fetch_code
+from .lift import Lifter
 from .normdiff import diff
 from .report import build_report, write_artifacts
 from .resolve import resolve_selectors, resolve_topics
@@ -100,6 +102,49 @@ def cmd_decompile(args) -> int:
     if d.solidity:
         _eprint("---- decompiled.sol ----")
         _eprint(d.solidity)
+    return 0
+
+
+def cmd_mine_selector(args) -> int:
+    from .mine import find_external_miner, mine
+    from .util import selector_of
+
+    sel = args.selector.lower().removeprefix("0x")
+    argtypes = args.argtypes if args.argtypes.startswith("(") else "(%s)" % args.argtypes
+    backend = "python" if args.python else "auto"
+    used = "python" if args.python else ("external" if find_external_miner() else "python")
+    _eprint("== mine-selector == 0x%s %s  [backend: %s]" % (sel, argtypes, used))
+    name = mine(sel, argtypes, workers=args.threads, prefix=args.prefix, backend=backend)
+    sig = "%s%s" % (name, argtypes)
+    assert selector_of(sig) == sel
+    _eprint("found: %s" % sig)
+    print(json.dumps({"selector": sel, "name": name, "signature": sig, "backend": used}))
+    return 0
+
+
+def cmd_lift(args) -> int:
+    code, _label = _resolve_source(args.target, args.rpc_url, args.no_cache)
+    a = analyze(code)
+    _resolve_analysis(a, use_network=not args.offline)
+    md = a.metadata
+    stripped = code[: md.start] if md.present else code
+    lifter = Lifter(disassemble(stripped))
+    lines = lifter.listing(selectors=a.selectors)
+    text = "\n".join(lines) + "\n"
+    if args.out:
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        with open(args.out, "w") as f:
+            f.write(text)
+        _eprint("== lift == %d line(s) -> %s" % (len(lines), args.out))
+    else:
+        _eprint("== lift ==")
+        _eprint(text)
+    print(json.dumps({
+        "ok": True,
+        "lines": len(lines),
+        "out": args.out,
+        "functions": [s.signature or ("selector 0x%s" % s.selector) for s in a.selectors],
+    }))
     return 0
 
 
@@ -234,7 +279,8 @@ def cmd_verify(args) -> int:
         "contract": best_contract.name if best_contract else None,
         "length_delta_opcodes": nd.length_delta if nd else None,
         "regions": [
-            {"tag": r.tag, "pc": r.target_pc, "function": r.function, "expected": r.expected[:16], "got": r.got[:16]}
+            {"tag": r.tag, "pc": r.target_pc, "function": r.function, "expected": r.expected[:16], "got": r.got[:16],
+             "expected_ir": r.expected_ir, "got_ir": r.got_ir}
             for r in (nd.regions[:8] if nd else [])
         ],
         "unresolved_selectors": unresolved,
@@ -310,6 +356,22 @@ def build_parser() -> argparse.ArgumentParser:
     pd.add_argument("--timeout", type=int, default=120)
     pd.add_argument("--skip-resolving", action="store_true")
     pd.set_defaults(func=cmd_decompile)
+
+    pm = sub.add_parser("mine-selector", help="mint a func name whose selector matches exactly (for unrecoverable names)")
+    pm.add_argument("selector", help="target 4-byte selector (0x + 8 hex, or 8 hex)")
+    pm.add_argument("argtypes", help="canonical arg types, e.g. '(address[],uint256[])'")
+    pm.add_argument("--threads", type=int, help="worker/thread count (default: all cores)")
+    pm.add_argument("--prefix", help="candidate name prefix (default: func_<selector>_)")
+    pm.add_argument("--python", action="store_true", help="force the pure-Python backend (skip the external miner)")
+    pm.set_defaults(func=cmd_mine_selector)
+
+    pl = sub.add_parser("lift", help="deterministic intra-block IR lift of the runtime code")
+    pl.add_argument("target", nargs="+", help=src_help)
+    pl.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
+    pl.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
+    pl.add_argument("--offline", action="store_true", help="skip openchain network lookups")
+    pl.add_argument("--out", help="write the listing to a file (else stderr)")
+    pl.set_defaults(func=cmd_lift)
 
     pv = sub.add_parser("verify", help="compile a candidate source and compare to target bytecode")
     pv.add_argument("solfile", help="candidate Solidity source file")

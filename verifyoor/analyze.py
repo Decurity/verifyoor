@@ -53,6 +53,19 @@ class Analysis:
         }
 
 
+def attribute_function(pc: int, selectors: List[SelectorEntry]) -> str:
+    """Name the function whose body region contains pc (via sorted body offsets)."""
+    if not selectors:
+        return "code@0x%x" % pc
+    name = None
+    for s in sorted(selectors, key=lambda s: s.body_offset):
+        if s.body_offset <= pc:
+            name = s.signature or ("selector 0x%s" % s.selector)
+        else:
+            break
+    return name or "dispatcher/prologue"
+
+
 def _resolve_body(entry_pc: int, ops: List[Op], by_pc: Dict[int, int], depth: int = 0) -> int:
     """Follow a dispatcher entry through decode/relay trampolines to the real body.
 
