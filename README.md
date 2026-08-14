@@ -27,7 +27,12 @@ Two layers:
    name is unrecoverable — a collision or a custom name), pinned-solc compilation
    with a settings sweep, a **source-variant sweep** (`sweep` — expand a templated
    candidate's `<<< a ||| b >>>` markers across all variants × settings, ranked by
-   diff-region count, until byte-exact), masked byte-exact comparison, and an **offset-stable
+   diff-region count, until byte-exact), a **library-version sweep**
+   (`identify-library` — for contracts built on a known OSS library like
+   OpenZeppelin, sweep the library's published versions × settings, scored by
+   basic-block fingerprint overlap against the target, to recover large verbatim
+   chunks and pin the compiler settings before hand-authoring the rest), masked
+   byte-exact comparison, and an **offset-stable
    normalized-disassembly diff** that attributes each remaining divergence to a
    specific function via **context-sensitive CFG** analysis (each function's
    context-matched reachable blocks; a divergence in genuinely shared codegen reads
@@ -74,6 +79,8 @@ uv run verifyoor lift      <network> <address> --out runs/<name>/lift.txt
 uv run verifyoor mine-selector 0x2247831f "(address[],uint256[])"
 uv run verifyoor verify    <src.sol> <network> <address> --sweep --out runs/<name>
 uv run verifyoor sweep     <template.sol> <network> <address> --out runs/<name>
+uv run verifyoor identify-library <probe.sol> <network> <address> \
+  --package @openzeppelin/contracts --path access/Ownable2Step.sol --contract Probe
 
 # local bytecode works in place of <network> <address>:
 uv run verifyoor analyze   tests/fixtures/sample.hex
@@ -143,16 +150,17 @@ immutable value slots (recovered and reported); masking library link placeholder
 
 ```sh
 uv run python tests/fixtures/generate_fixtures.py   # (re)generate fixtures
-uv run pytest                                       # 86 tests (2 gate on the external miner)
+uv run pytest                                       # 96 tests (2 gate on the external miner)
 ```
 
 The suite covers metadata parsing, the dispatcher walk (EQ/SUB forms, trampoline
 body-offset tracing), string extraction across all three solc encodings, the
 offset-stable diff, the intra-block IR lift (stack semantics, let/temp policy,
 block splitting) with CFG edge resolution, context-sensitive CFG attribution,
-template expansion for the variant sweep, selector minting (both backends), evmole
-enrichment (arg types, mutability, storage layout), immutable masking, viaIR
-detection, and round-trips
+template expansion for the variant sweep, library import resolution and
+basic-block fingerprinting (network calls injected, not live in tests), selector
+minting (both backends), evmole enrichment (arg types, mutability, storage
+layout), immutable masking, viaIR detection, and round-trips
 of fixtures exercising structs, mappings, events, custom errors, immutables,
 optimizer-on, viaIR, and solc 0.7.6. Compile-dependent tests need the matching
 solc binaries; network-dependent name resolution is cached (`--offline` to skip).

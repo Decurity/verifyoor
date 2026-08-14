@@ -374,6 +374,65 @@ def cmd_sweep(args) -> int:
     return 1
 
 
+def cmd_identify_library(args) -> int:
+    """Sweep a known library's versions x compiler settings; score by basic-block
+    fingerprint overlap against the target. Recovers large verbatim chunks and pins
+    settings before hand-authoring the rest — see verifyoor/libmatch.py."""
+    from .compile import Settings, settings_sweep
+    from .libmatch import npm_versions, sweep_versions
+
+    target, _label = _resolve_source(args.target, args.rpc_url, args.no_cache)
+    with open(args.probe) as f:
+        probe_template = f.read()
+    a = analyze(target)
+    version = args.solc or a.metadata.solc
+    if not version:
+        _eprint("no solc version in metadata; pass --solc <version>")
+        return 2
+
+    versions = args.versions.split(",") if args.versions else npm_versions(args.package, args.max_versions)
+    if not versions:
+        _eprint("identify-library: no versions found for %s (network issue, or pass --versions)" % args.package)
+        return 2
+
+    forced = _parse_optimizer(args.optimizer)
+    if forced is None and args.evm is None and not args.via_ir:
+        settings_list = list(settings_sweep(version, evm_floor=a.evm_floor))
+    else:
+        base = forced or Settings()
+        settings_list = [Settings(base.optimizer_enabled, base.optimizer_runs, args.evm, args.via_ir)]
+
+    _eprint("== identify-library == %s across %d version(s) x %d setting(s)"
+            % (args.package, len(versions), len(settings_list)))
+    results = sweep_versions(target, probe_template, args.contract, args.package, args.path,
+                             version, versions, settings_list)
+    if not results:
+        _eprint("identify-library: no version compiled (network issue, bad --path/--contract, or solc error)")
+        print(json.dumps({"ok": False}))
+        return 1
+
+    best = results[0]
+    tstrip, _ = metadata.strip_trailing(target)
+    _eprint("best: %s %s | %d/%d blocks matched (%.0f%%) | ~%d bytes of %d recovered"
+            % (args.package, best.version, best.hit, best.total, 100 * best.fraction,
+               best.matched_bytes, len(tstrip)))
+    _eprint("settings: %s" % best.settings.describe())
+    top = results[:10]
+    for r in top[1:]:
+        _eprint("  runner-up: %s %s | %d/%d (%.0f%%)" % (args.package, r.version, r.hit, r.total, 100 * r.fraction))
+    if best.fraction < 0.5:
+        _eprint("⚠ low match fraction — likely the wrong library/path, or the wrong solc version")
+    print(json.dumps({
+        "ok": True,
+        "best": {"version": best.version, "settings": best.settings.describe(),
+                 "hit": best.hit, "total": best.total, "fraction": best.fraction,
+                 "matched_bytes": best.matched_bytes},
+        "runners_up": [{"version": r.version, "settings": r.settings.describe(),
+                        "hit": r.hit, "total": r.total} for r in top[1:]],
+    }, indent=2))
+    return 0
+
+
 def cmd_submit(args) -> int:
     from .submit import build_standard_input, chain_id_for, etherscan_submit, solc_long_version, sourcify_submit
 
@@ -479,6 +538,22 @@ def build_parser() -> argparse.ArgumentParser:
     pw.add_argument("--out", help="output dir (artifacts on match; closest.sol otherwise)")
     pw.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
     pw.set_defaults(func=cmd_sweep)
+
+    pl2 = sub.add_parser("identify-library", help="sweep a known library's versions x settings; score by block-fingerprint overlap")
+    pl2.add_argument("probe", help="Solidity file importing the library, e.g. 'import \"@openzeppelin/contracts/access/Ownable2Step.sol\";'")
+    pl2.add_argument("target", nargs="+", help=src_help)
+    pl2.add_argument("--package", required=True, help="npm package name, e.g. @openzeppelin/contracts")
+    pl2.add_argument("--path", required=True, help="path within the package to the probe's imported root file")
+    pl2.add_argument("--contract", required=True, help="contract name to select from the probe compile output")
+    pl2.add_argument("--versions", help="comma-separated versions to sweep (default: fetched from the npm registry)")
+    pl2.add_argument("--max-versions", type=int, default=30, help="cap when versions are auto-fetched (default 30, newest-first)")
+    pl2.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
+    pl2.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
+    pl2.add_argument("--solc", help="solc version (defaults to metadata)")
+    pl2.add_argument("--optimizer", help="pin optimizer (off | on:RUNS); default sweeps the standard grid")
+    pl2.add_argument("--evm", help="pin evmVersion; default sweeps candidates")
+    pl2.add_argument("--via-ir", action="store_true", help="pin viaIR on")
+    pl2.set_defaults(func=cmd_identify_library)
 
     ps = sub.add_parser("submit", help="submit a verified run dir to Etherscan/Sourcify (standard-json)")
     ps.add_argument("rundir", help="a verify --out directory (with settings.json + source.sol)")
