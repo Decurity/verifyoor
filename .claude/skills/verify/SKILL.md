@@ -129,8 +129,12 @@ uv run verifyoor verify runs/<name>/candidate.sol <TARGET> --sweep --out runs/<n
 
 ### 5. Read the diff and fix exactly what differs
 On mismatch the JSON lists divergent **regions**, each attributed to a function
-with `expected` (on-chain / correct) vs `got` (your candidate) opcode tokens,
-plus `expected_ir` / `got_ir`: the enclosing basic block(s) lifted to the same
+(via context-sensitive CFG analysis — a region in genuinely shared codegen reads
+`shared helper`, meaning the fix is in code *several* functions share, e.g. a
+common encode/return helper: make all call sites the same shape rather than
+editing one function) with `expected` (on-chain / correct) vs `got` (your
+candidate) opcode tokens, plus `expected_ir` / `got_ir`: the enclosing block(s)
+lifted to the same
 Yul-style IR as `lift`. **Read the IR first** — a missing `require` is a missing
 `jumpi(…)` statement, a wrong constant sits visibly in place, and printable
 constants carry an inline `/* "…" */` ASCII decode — then use the token stream
