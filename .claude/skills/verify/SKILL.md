@@ -70,6 +70,16 @@ Read the human summary (stderr) and JSON (stdout). Note:
   function that really takes four arrays — the dispatcher byte still matches, so only
   the body would diverge) — discard the name, author from evmole's arg types, and
   mint the selector.
+- **storage layout** (from evmole): each slot's `type`, packing `offset`, and the
+  selectors that read/write it. **Declare your state variables in this exact order
+  (slot, then offset), with these types** — order, packing, and type must match
+  byte-for-byte (names need not; they aren't in bytecode). Nested mappings and
+  packed slots are recovered. This eliminates the storage-layout diff class up
+  front. The read/write selectors also corroborate structure (a slot written only
+  by one function is an owner/guard; a mapping read by a getter names that getter).
+  Types are inferred, so a full-slot integer's width is a strong hint, not gospel —
+  the diff loop arbitrates. `immutable`/`constant` values aren't storage (they live
+  in bytecode; `compare` masks/recovers immutables separately).
 - **receive()/fallback()** presence → add `receive() external payable {}` / a `fallback`.
 - **strings**: revert/require/log literals — reuse these **verbatim**. Recovered
   across all three solc encodings (shift-encoded `PUSHn X PUSH1 s SHL`, PUSH32
@@ -140,7 +150,7 @@ for byte-width detail. Interpretation guide (token-level signals):
 | Extra/missing `ISZERO`+`PUSHDEST`+`JUMPI` block | A `require`/`if` guard is missing or extra. Check zero-address checks, bounds. |
 | `expected` has `62461bcd60e51b` shift vs your `PUSH32 08c379a0…` | Optimizer mismatch — re-run with `--sweep` (or `--optimizer on:200`). |
 | Custom-error selector (`PUSH4`) vs `Error(string)` (`08c379a0`) | Source uses `revert CustomError()` not `require(_, "str")` (or vice-versa). |
-| Diff in SLOAD/SSTORE + slot constants | Storage variable **order/packing** wrong — reorder declarations, fix types. |
+| Diff in SLOAD/SSTORE + slot constants | Storage variable **order/packing** wrong — match the storage layout `analyze` printed (slot/offset/type), reordering declarations to fit. |
 | `expected: PUSH32 0x00…00<addr> … AND` vs your `PUSH20 <addr>` | The value is **`immutable`, not `constant`** — declare it immutable and set it in the constructor (on-chain code carries the value; `compare` masks/recovers the slots). |
 | Prologue `CALLDATASIZE LT ISZERO …` (expected) vs `CALLDATASIZE LT …` (got) | Target is **viaIR**, your build is legacy — add `--via-ir`. |
 | External calls each generate their own inline returndata handling, but the target routes them all through one shared helper (`… JUMP` to a common JUMPDEST) | Make **every** external call the same low-level shape — `(bool s, bytes memory d) = t.call(abi.encodeWithSelector(...))` / `.staticcall(...)` — so solc shares one encode/return helper. Mixing high-level `IERC20.x()` calls with `assembly{call}` blocks each other from sharing. |

@@ -38,6 +38,24 @@ class TestEvmoleEnrichment(unittest.TestCase):
         for k in ("arguments", "state_mutability"):
             self.assertIn(k, d)
 
+    def test_storage_layout_types_and_slots(self):
+        # counter_unopt: slot 0 uint256 (the counter), slot 1 address
+        a = analyze(load_bytecode("tests/fixtures/counter_unopt.hex"))
+        layout = {v.slot: v for v in a.storage}
+        self.assertEqual(layout[0].type, "uint256")
+        self.assertEqual(layout[1].type, "address")
+        # sorted in declaration order (slot, then packing offset)
+        self.assertEqual([v.slot for v in a.storage], sorted(v.slot for v in a.storage))
+        # writers are recorded as selectors
+        self.assertTrue(layout[0].writes)
+        self.assertIn("slot", layout[0].to_dict())
+
+    def test_storage_recovers_nested_mappings(self):
+        a = analyze(load_bytecode("tests/fixtures/vault.hex"))
+        types = {v.slot: v.type for v in a.storage}
+        self.assertEqual(types[0], "mapping(address => uint128)")
+        self.assertEqual(types[1], "mapping(address => mapping(address => uint256))")
+
 
 if __name__ == "__main__":
     unittest.main()

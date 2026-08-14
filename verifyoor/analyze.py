@@ -34,6 +34,24 @@ class SelectorEntry:
 
 
 @dataclass
+class StorageVar:
+    """A storage slot evmole recovered: its type, intra-slot packing offset, and the
+    selectors that read/write it. Declare state variables in (slot, offset) order with
+    these types to reproduce solc's layout — order/packing/type must match byte-for-byte,
+    the names need not (they aren't in bytecode). Types are inferred from access patterns:
+    mappings/addresses are reliable, a full-slot integer's width is a strong hint."""
+    slot: int
+    offset: int  # byte offset within the slot (packing); 0 unless the slot is shared
+    type: str
+    reads: List[str] = field(default_factory=list)  # selectors that SLOAD this slot
+    writes: List[str] = field(default_factory=list)  # selectors that SSTORE this slot
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"slot": self.slot, "offset": self.offset, "type": self.type,
+                "reads": self.reads, "writes": self.writes}
+
+
+@dataclass
 class Analysis:
     code: bytes
     metadata: metadata.Metadata
@@ -47,13 +65,15 @@ class Analysis:
     optimizer_guess: str = "unknown"  # "off" | "on" | "unknown"
     via_ir_guess: str = "unknown"  # "likely" | "unlikely" | "unknown"
     embedded_metadata: List[Tuple[int, int]] = field(default_factory=list)
-    evmole_available: bool = False  # whether arg types / mutability were enriched
+    evmole_available: bool = False  # whether arg types / mutability / storage were enriched
+    storage: List[StorageVar] = field(default_factory=list)  # slot layout from evmole
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "code_len": len(self.code),
             "metadata": self.metadata.to_dict(),
             "selectors": [s.to_dict() for s in self.selectors],
+            "storage": [v.to_dict() for v in self.storage],
             "has_receive_or_fallback": self.has_receive_or_fallback,
             "strings": self.strings,
             "push32_hashes": self.push32_hashes,
@@ -67,41 +87,39 @@ class Analysis:
         }
 
 
-def _evmole_functions(code: bytes):
-    """evmole's decoded functions for the runtime code, or None if unavailable.
+def evmole_info(code: bytes):
+    """evmole's analysis of the runtime code (functions + storage), or None.
 
     evmole (https://github.com/cdump/evmole, MIT) is the **primary** source for the
-    selector set, argument types, and state mutability — materially more accurate
-    than a hand-rolled dispatcher walk + ABI guess, in reproducible benchmarks.
-    It's a required dependency; the import/error guard is a robustness net so a bad
-    bytecode input (or a broken install) degrades to the fallback walk rather than
-    crashing analysis."""
+    selector set, argument types, state mutability, and storage layout — materially
+    more accurate than a hand-rolled dispatcher walk + ABI guess, in reproducible
+    benchmarks. It's a required dependency; the import/error guard is a robustness net
+    so a bad bytecode input (or a broken install) degrades to the fallback walk (and an
+    empty storage layout) rather than crashing analysis. One call feeds everything."""
     try:
         import evmole
     except ImportError:
         return None
     try:
-        info = evmole.contract_info("0x" + code.hex(), selectors=True,
-                                    arguments=True, state_mutability=True)
+        return evmole.contract_info("0x" + code.hex(), selectors=True, arguments=True,
+                                    state_mutability=True, storage=True)
     except Exception:
         return None
-    return info.functions
 
 
-def build_selectors(ops: List[Op], code: bytes) -> Tuple[List[SelectorEntry], bool]:
+def build_selectors(ops: List[Op], info) -> Tuple[List[SelectorEntry], bool]:
     """Selector entries, favoring evmole; the dispatcher walk is the fallback/union.
 
-    evmole supplies the selector set, arg types, and mutability. Its dispatcher-entry
-    offset is fed through `_resolve_body`, so the trampoline-resolved body offset
-    (used for diff attribution) is identical to what `walk_dispatcher` produced —
-    verified across all fixtures. `walk_dispatcher` then fills any selector evmole
-    missed, and is the sole source when evmole is unavailable. Returns
+    evmole (`info`) supplies the selector set, arg types, and mutability. Its
+    dispatcher-entry offset is fed through `_resolve_body`, so the trampoline-resolved
+    body offset (used for diff attribution) is identical to what `walk_dispatcher`
+    produced — verified across all fixtures. `walk_dispatcher` then fills any selector
+    evmole missed, and is the sole source when evmole is unavailable. Returns
     (entries sorted by body offset, evmole_used)."""
     by_pc = {op.pc: i for i, op in enumerate(ops)}
     entries: Dict[str, SelectorEntry] = {}
-    fns = _evmole_functions(code)
-    if fns is not None:
-        for f in fns:
+    if info is not None:
+        for f in info.functions:
             sel = f.selector.lower().removeprefix("0x")
             entries[sel] = SelectorEntry(
                 sel,
@@ -111,7 +129,16 @@ def build_selectors(ops: List[Op], code: bytes) -> Tuple[List[SelectorEntry], bo
             )
     for s in walk_dispatcher(ops):  # union: adds evmole misses / sole source on fallback
         entries.setdefault(s.selector, s)
-    return sorted(entries.values(), key=lambda e: e.body_offset), fns is not None
+    return sorted(entries.values(), key=lambda e: e.body_offset), info is not None
+
+
+def storage_layout(info) -> List[StorageVar]:
+    """Storage slots from evmole, sorted in declaration order (slot, then packing offset)."""
+    if info is None:
+        return []
+    out = [StorageVar(slot=int(r.slot, 16), offset=r.offset, type=r.type,
+                      reads=list(r.reads), writes=list(r.writes)) for r in info.storage]
+    return sorted(out, key=lambda v: (v.slot, v.offset))
 
 
 def attribute_function(pc: int, selectors: List[SelectorEntry]) -> str:
@@ -447,7 +474,9 @@ def analyze(code: bytes) -> Analysis:
     stripped = code[: md.start] if md.present else code
     ops = disassemble(stripped)
 
-    selectors, evmole_available = build_selectors(ops, stripped)
+    info = evmole_info(stripped)
+    selectors, evmole_available = build_selectors(ops, info)
+    storage = storage_layout(info)
     sel_set = {s.selector for s in selectors}
     topics, error_sels = collect_hash_candidates(ops, sel_set)
     evm_floor, solc_floor = detect_floors(ops)
@@ -466,4 +495,5 @@ def analyze(code: bytes) -> Analysis:
         via_ir_guess=detect_via_ir(ops),
         embedded_metadata=[r for r in metadata.find_embedded(code) if not (md.present and r[0] == md.start)],
         evmole_available=evmole_available,
+        storage=storage,
     )

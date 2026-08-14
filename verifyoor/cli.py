@@ -82,6 +82,12 @@ def cmd_analyze(args) -> int:
             _eprint("      → unresolved; mint: verifyoor mine-selector 0x%s \"%s\"" % (s.selector, s.mint_signature()))
     if a.has_receive_or_fallback:
         _eprint("  + receive()/fallback() present")
+    if a.storage:
+        _eprint("storage layout (declare state vars in this order):")
+        for v in a.storage:
+            at = "slot %d" % v.slot + (" @byte %d" % v.offset if v.offset else "")
+            writers = ("  written by %s" % ", ".join("0x" + w for w in v.writes)) if v.writes else "  (read-only)"
+            _eprint("  %-8s %s%s" % (at, v.type, writers))
     if a.strings:
         _eprint("strings: %s" % ", ".join(repr(x) for x in a.strings))
     for h, names in out["resolved_events"].items():

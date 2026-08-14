@@ -16,8 +16,8 @@ Two layers:
 
 1. **Deterministic toolkit** (`verifyoor …`) — all the mechanical work: CBOR
    metadata parsing, disassembly, **evmole**-primary selector / argument-type /
-   state-mutability extraction with trampoline body-offset tracing (a built-in
-   dispatcher walk is the fallback), **Sourcify** 4byte signature resolution
+   state-mutability / **storage-layout** extraction with trampoline body-offset
+   tracing (a built-in dispatcher walk is the fallback), **Sourcify** 4byte resolution
    (rehash-verified, verified-contract names ranked first),
    heimdall decompilation, an **intra-block IR lift** (per-basic-block symbolic stack
    execution into Yul-style statements — deterministic and complete for EVM
@@ -138,14 +138,14 @@ immutable value slots (recovered and reported); masking library link placeholder
 
 ```sh
 uv run python tests/fixtures/generate_fixtures.py   # (re)generate fixtures
-uv run pytest                                       # 67 tests (2 gate on the external miner)
+uv run pytest                                       # 69 tests (2 gate on the external miner)
 ```
 
 The suite covers metadata parsing, the dispatcher walk (EQ/SUB forms, trampoline
 body-offset tracing), string extraction across all three solc encodings, the
 offset-stable diff, the intra-block IR lift (stack semantics, let/temp policy,
-block splitting), selector minting (both backends), evmole enrichment (arg types
-+ mutability), immutable masking, viaIR detection, and end-to-end round-trips
+block splitting), selector minting (both backends), evmole enrichment (arg types,
+mutability, storage layout), immutable masking, viaIR detection, and round-trips
 of fixtures exercising structs, mappings, events, custom errors, immutables,
 optimizer-on, viaIR, and solc 0.7.6. Compile-dependent tests need the matching
 solc binaries; network-dependent name resolution is cached (`--offline` to skip).
