@@ -65,10 +65,11 @@ Read the human summary (stderr) and JSON (stdout). Note:
   correct parameter lists and the mutability for `view`/`payable` markers.
   `UNRESOLVED` means the Sourcify 4byte DB has no verified name — analyze prints a
   ready `mine-selector` command with evmole's arg types; see *Unresolved selectors*.
-  A **⚠ DB-name collision** line means the signature DB resolved a name whose arg types
-  disagree with evmole's decode (a wrong 4-byte preimage, e.g. `transfer(address,
-  uint256)` on a function that really takes four arrays) — **discard that name**,
-  author from evmole's arg types, and mint the selector.
+  **If a resolved name's args disagree with the evmole `arguments` shown beside it,
+  the name is a wrong-preimage collision** (e.g. `transfer(address,uint256)` on a
+  function that really takes four arrays — the dispatcher byte still matches, so only
+  the body would diverge) — discard the name, author from evmole's arg types, and
+  mint the selector.
 - **receive()/fallback()** presence → add `receive() external payable {}` / a `fallback`.
 - **strings**: revert/require/log literals — reuse these **verbatim**. Recovered
   across all three solc encodings (shift-encoded `PUSHn X PUSH1 s SHL`, PUSH32
@@ -176,10 +177,11 @@ appears in runtime bytecode, only its 4-byte selector does. So any name with the
    ERC/proxy standards like `owner()`, `balanceOf(address)`), write it, and verify.
 2. **The arg types are what matter — take them from `analyze`'s evmole `arguments`,
    not the DB name.** A signature-DB "resolved" name can be a *wrong* selector
-   collision (4 bytes → many preimages); analyze flags these as **⚠ DB-name
-   collision** when evmole's decoded args disagree. evmole gives the arg types
-   directly (e.g. `(address[],uint256[],uint256[],uint256[])`); cross-check against
-   the lift IR when in doubt — a body that does `eq(mload(in1),mload(in0))` takes
+   collision (4 bytes → many preimages): if the resolved name's args disagree with
+   the evmole `arguments` shown beside it, discard the name and mint. evmole gives
+   the arg types directly (e.g. `(address[],uint256[],uint256[],uint256[])`);
+   cross-check against the lift IR when in doubt — a body that does
+   `eq(mload(in1),mload(in0))` takes
    **arrays**, decoder head-slots (`calldataload(add(inN,0x00/0x20/…))`) give the arg
    count, and element masks (`and(0xffff…ff, …)` = address) give types.
 3. If the name is unrecoverable, **mint one for the exact selector** with the arg

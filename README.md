@@ -18,8 +18,7 @@ Two layers:
    metadata parsing, disassembly, **evmole**-primary selector / argument-type /
    state-mutability extraction with trampoline body-offset tracing (a built-in
    dispatcher walk is the fallback), **Sourcify** 4byte signature resolution
-   (rehash-verified, verified-contract names ranked first; with evmole **collision**
-   flagging — a resolved name whose decoded args disagree),
+   (rehash-verified, verified-contract names ranked first),
    heimdall decompilation, an **intra-block IR lift** (per-basic-block symbolic stack
    execution into Yul-style statements — deterministic and complete for EVM
    bytecode, surfaced standalone via `lift` and inline in every diff region),
@@ -108,8 +107,9 @@ only the 4-byte selector `keccak(name+argtypes)[:4]`. So when a function's real
 name is unrecoverable (a custom name absent from signature DBs, or a selector
 **collision** where the DB resolves the wrong preimage — e.g. a 2-array batch
 function that happens to share `transfer`'s `0xa9059cbb`), you don't need the
-name. Read the **arg types** off the `lift` IR (they drive the body's codegen and
-must be right), then mint any name that hashes to the selector:
+name. Take the **arg types** from `analyze` (evmole; they drive the body's codegen
+and must be right — cross-check the `lift` IR when in doubt), then mint any name
+that hashes to the selector:
 
 ```sh
 uv run verifyoor mine-selector 0x2247831f "(address[],uint256[])"
@@ -138,14 +138,14 @@ immutable value slots (recovered and reported); masking library link placeholder
 
 ```sh
 uv run python tests/fixtures/generate_fixtures.py   # (re)generate fixtures
-uv run pytest                                       # 71 tests (2 gate on the external miner)
+uv run pytest                                       # 67 tests (2 gate on the external miner)
 ```
 
 The suite covers metadata parsing, the dispatcher walk (EQ/SUB forms, trampoline
 body-offset tracing), string extraction across all three solc encodings, the
 offset-stable diff, the intra-block IR lift (stack semantics, let/temp policy,
-block splitting), selector minting (both backends), evmole enrichment + DB-name
-collision detection, immutable masking, viaIR detection, and end-to-end round-trips
+block splitting), selector minting (both backends), evmole enrichment (arg types
++ mutability), immutable masking, viaIR detection, and end-to-end round-trips
 of fixtures exercising structs, mappings, events, custom errors, immutables,
 optimizer-on, viaIR, and solc 0.7.6. Compile-dependent tests need the matching
 solc binaries; network-dependent name resolution is cached (`--offline` to skip).

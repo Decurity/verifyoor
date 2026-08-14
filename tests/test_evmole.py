@@ -1,4 +1,4 @@
-"""evmole enrichment: arg types + mutability, and DB-name collision detection."""
+"""evmole enrichment: per-selector argument types + state mutability."""
 import importlib.util
 import unittest
 
@@ -8,37 +8,18 @@ from verifyoor.util import load_bytecode
 _HAS_EVMOLE = importlib.util.find_spec("evmole") is not None
 
 
-class TestConflictLogic(unittest.TestCase):
-    """db_name_conflict / mint_signature are pure logic — no evmole needed."""
-
-    def test_conflict_when_arg_types_disagree(self):
-        # openchain resolved transfer(address,uint256) but evmole decoded more args
-        e = SelectorEntry("a9059cbb", 0x206, signature="transfer(address,uint256)",
-                          arguments="address,uint256,(uint256,uint256,uint256)")
-        self.assertTrue(e.db_name_conflict)
-
-    def test_no_conflict_when_args_match(self):
-        e = SelectorEntry("2e1a7d4d", 0x128, signature="withdraw(uint256)", arguments="uint256")
-        self.assertFalse(e.db_name_conflict)
-
-    def test_no_conflict_for_no_arg_getter(self):
-        e = SelectorEntry("8da5cb5b", 0x1b4, signature="owner()", arguments="")
-        self.assertFalse(e.db_name_conflict)
-
-    def test_whitespace_insensitive(self):
-        e = SelectorEntry("00000000", 0, signature="f(address, uint256)", arguments="address,uint256")
-        self.assertFalse(e.db_name_conflict)
-
-    def test_no_conflict_without_name_or_without_evmole(self):
-        self.assertFalse(SelectorEntry("0", 0, signature=None, arguments="address").db_name_conflict)
-        self.assertFalse(SelectorEntry("0", 0, signature="f(address)", arguments=None).db_name_conflict)
+class TestMintSignature(unittest.TestCase):
+    """mint_signature is pure logic — no evmole needed."""
 
     def test_mint_signature(self):
         e = SelectorEntry("2247831f", 0x10c, arguments="address[],uint256[],uint256[],uint256[]")
         self.assertEqual(e.mint_signature(), "(address[],uint256[],uint256[],uint256[])")
 
+    def test_mint_signature_no_args(self):
+        self.assertEqual(SelectorEntry("12065fe0", 0xe2, arguments="").mint_signature(), "()")
 
-@unittest.skipUnless(_HAS_EVMOLE, "evmole not installed (optional dependency)")
+
+@unittest.skipUnless(_HAS_EVMOLE, "evmole not installed")
 class TestEvmoleEnrichment(unittest.TestCase):
     def test_enriches_args_and_mutability(self):
         a = analyze(load_bytecode("tests/fixtures/sample.hex"))
@@ -54,7 +35,7 @@ class TestEvmoleEnrichment(unittest.TestCase):
     def test_to_dict_carries_evmole_fields(self):
         a = analyze(load_bytecode("tests/fixtures/sample.hex"))
         d = a.selectors[0].to_dict()
-        for k in ("arguments", "state_mutability", "db_name_conflict"):
+        for k in ("arguments", "state_mutability"):
             self.assertIn(k, d)
 
 

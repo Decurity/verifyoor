@@ -19,18 +19,6 @@ class SelectorEntry:
     arguments: Optional[str] = None  # canonical arg types from evmole, e.g. "address,uint256"
     state_mutability: Optional[str] = None  # "pure"|"view"|"payable"|"nonpayable" from evmole
 
-    @property
-    def db_name_conflict(self) -> bool:
-        """True when the DB-resolved name's arg types disagree with evmole's.
-
-        A 4-byte selector has many preimages, so a signature-DB hit can be the wrong
-        one (e.g. `transfer(address,uint256)` for a function whose bytecode actually
-        decodes four arrays). When evmole's decoded arg types don't match the
-        resolved signature's, the name is a collision — mint from evmole's types."""
-        if not self.signature or self.arguments is None:
-            return False
-        return _canon_args(_sig_args(self.signature)) != _canon_args(self.arguments)
-
     def mint_signature(self) -> str:
         """Arg-type signature to hand `mine-selector` when the name is unrecoverable."""
         return "(%s)" % (self.arguments or "")
@@ -42,18 +30,7 @@ class SelectorEntry:
             "signature": self.signature,
             "arguments": self.arguments,
             "state_mutability": self.state_mutability,
-            "db_name_conflict": self.db_name_conflict,
         }
-
-
-def _sig_args(signature: str) -> str:
-    """The arg-type list inside a canonical signature: 'f(a,b)' -> 'a,b'."""
-    i = signature.find("(")
-    return signature[i + 1 : signature.rfind(")")] if i >= 0 else ""
-
-
-def _canon_args(args: str) -> str:
-    return "".join(args.split())  # whitespace-insensitive compare
 
 
 @dataclass
