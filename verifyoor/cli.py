@@ -1,4 +1,4 @@
-"""verifyoor CLI: analyze | decompile | lift | verify | submit.
+"""verifyoor CLI: analyze | lift | mine-selector | verify | submit.
 
 The deterministic toolkit Claude Code drives while reconstructing source. JSON on
 stdout for machine consumption; a human-readable summary on stderr. `verify` exits
@@ -17,7 +17,6 @@ from .analyze import analyze
 from .compare import Comparison, compare
 from .compile import CompileResult, Settings, compile_standard, settings_sweep
 from .cfg import Cfg
-from .decompile import decompile
 from .disasm import disassemble
 from .fetch import fetch_code
 from .lift import Lifter
@@ -95,25 +94,6 @@ def cmd_analyze(args) -> int:
         _eprint("event topic 0x%s… -> %s" % (h[:12], names))
     for h, names in out["resolved_errors"].items():
         _eprint("error 0x%s -> %s" % (h, names))
-    return 0
-
-
-def cmd_decompile(args) -> int:
-    code, _label = _resolve_source(args.target, args.rpc_url, args.no_cache)
-    outdir = args.out or os.path.join("runs", "decompile")
-    code_hex = "0x" + code.hex()
-    d = decompile(code_hex, outdir, timeout=args.timeout, skip_resolving=args.skip_resolving)
-    if not d.ok:
-        _eprint("decompile failed: %s" % d.error)
-        print(json.dumps({"ok": False, "error": d.error}))
-        return 1
-    print(json.dumps({"ok": True, "outdir": d.outdir, "signatures": d.resolved_signatures}))
-    _eprint("== heimdall decompilation (%s) ==" % d.outdir)
-    if d.resolved_signatures:
-        _eprint("signatures: %s" % ", ".join(d.resolved_signatures))
-    if d.solidity:
-        _eprint("---- decompiled.sol ----")
-        _eprint(d.solidity)
     return 0
 
 
@@ -362,15 +342,6 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
     pa.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
     pa.set_defaults(func=cmd_analyze)
-
-    pd = sub.add_parser("decompile", help="heimdall decompile wrapper")
-    pd.add_argument("target", nargs="+", help=src_help)
-    pd.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
-    pd.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
-    pd.add_argument("--out", help="output directory")
-    pd.add_argument("--timeout", type=int, default=120)
-    pd.add_argument("--skip-resolving", action="store_true")
-    pd.set_defaults(func=cmd_decompile)
 
     pm = sub.add_parser("mine-selector", help="mint a func name whose selector matches exactly (for unrecoverable names)")
     pm.add_argument("selector", help="target 4-byte selector (0x + 8 hex, or 8 hex)")

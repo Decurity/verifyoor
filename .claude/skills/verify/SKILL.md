@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify a deployed contract by reconstructing the exact Solidity source that recompiles to its on-chain runtime bytecode (Etherscan/Sourcify partial-match standard). Use when given a `<network> <address>` (e.g. `ethereum 0xC02a…`) — or local runtime bytecode as a .hex file / 0x-hex string — and asked to recover, verify, or match its source. Drives the verifyoor toolkit in an analyze → decompile → author → compile → diff → iterate loop.
+description: Verify a deployed contract by reconstructing the exact Solidity source that recompiles to its on-chain runtime bytecode (Etherscan/Sourcify partial-match standard). Use when given a `<network> <address>` (e.g. `ethereum 0xC02a…`) — or local runtime bytecode as a .hex file / 0x-hex string — and asked to recover, verify, or match its source. Drives the verifyoor toolkit in an analyze → lift → author → compile → diff → iterate loop.
 ---
 
 # verify — deployed contract → matching Solidity source
@@ -12,7 +12,7 @@ runtime bytecode via `eth_getCode`. `<network>` is an alias (`ethereum`, `base`,
 `arbitrum`, `optimism`, `polygon`, `bsc`, `sepolia`, … — or a full RPC URL);
 `<address>` is `0x` + 40 hex. A single local `.hex` file / hex string also works
 in place of `<network> <address>`. Fetched code is cached, so the repeated
-analyze/decompile/verify calls below hit the network only once.
+analyze/lift/verify calls below hit the network only once.
 
 > Note: `eth_getCode` returns the code **at that address**. For a proxy this is
 > the proxy's own (usually minimal) runtime code — to recover the logic, pass the
@@ -104,16 +104,6 @@ disconnected fragments. `in0` is the top of the block's entry stack; the `//
 stack out` footer is what it passes to its successor. This is your main scaffold:
 accurate bodies + resolved edges + (from `analyze`) names, arg types, mutability,
 and storage layout.
-
-### 2b. Decompile (optional higher-level sketch)
-```
-uv run verifyoor decompile <TARGET> --out runs/<name>/heimdall
-```
-Optional. heimdall renders approximate pseudo-Solidity (readable `if`/assignments)
-that can convey the overall gist faster — but it **never compiles as-is and often
-gets storage math, masks, and control flow wrong**, so trust `analyze` + `lift`
-over it for anything load-bearing. Reach for it only when the CFG-resolved lift
-leaves you wanting a rougher, higher-level overview.
 
 ### 3. Author the candidate
 Write `runs/<name>/candidate.sol`:

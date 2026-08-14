@@ -22,8 +22,7 @@ Two layers:
    an **intra-block IR lift** (per-basic-block symbolic stack execution into
    Yul-style statements — deterministic and complete for EVM bytecode — with
    inter-block edges resolved from **evmole's CFG**, incl. context-sensitive dynamic
-   jumps; surfaced standalone via `lift` and inline in every diff region), optional
-   heimdall decompilation for a rough higher-level sketch,
+   jumps; surfaced standalone via `lift` and inline in every diff region),
    **selector minting** (mint a function name for an exact selector when the real
    name is unrecoverable — a collision or a custom name), pinned-solc compilation
    with a settings sweep, masked byte-exact comparison, and an **offset-stable
@@ -41,8 +40,7 @@ still differs" legible even when a one-line change shifts every jump target.
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/) (manages the Python environment).
-- [foundry](https://getfoundry.sh) (`cast`) on `PATH`. [heimdall](https://heimdall.rs)
-  is optional (a rough higher-level sketch; the CFG-resolved `lift` is the primary scaffold).
+- [foundry](https://getfoundry.sh) (`cast`) on `PATH`.
 - solc binaries under `~/.svm/<version>/solc-<version>` (or `solc-select`) for the
   versions you target; `verifyoor` auto-installs a missing one via `solc-select` when possible.
 
@@ -68,7 +66,6 @@ single local hex file / hex string:
 
 ```sh
 uv run verifyoor analyze   ethereum 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
-uv run verifyoor decompile <network> <address> --out D
 uv run verifyoor lift      <network> <address> --out runs/<name>/lift.txt
 uv run verifyoor mine-selector 0x2247831f "(address[],uint256[])"
 uv run verifyoor verify    <src.sol> <network> <address> --sweep --out runs/<name>
