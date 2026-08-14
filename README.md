@@ -19,9 +19,11 @@ Two layers:
    state-mutability / **storage-layout** extraction with trampoline body-offset
    tracing (a built-in dispatcher walk is the fallback), **Sourcify** 4byte resolution
    (rehash-verified, verified-contract names ranked first),
-   heimdall decompilation, an **intra-block IR lift** (per-basic-block symbolic stack
-   execution into Yul-style statements — deterministic and complete for EVM
-   bytecode, surfaced standalone via `lift` and inline in every diff region),
+   an **intra-block IR lift** (per-basic-block symbolic stack execution into
+   Yul-style statements — deterministic and complete for EVM bytecode — with
+   inter-block edges resolved from **evmole's CFG**, incl. context-sensitive dynamic
+   jumps; surfaced standalone via `lift` and inline in every diff region), optional
+   heimdall decompilation for a rough higher-level sketch,
    **selector minting** (mint a function name for an exact selector when the real
    name is unrecoverable — a collision or a custom name), pinned-solc compilation
    with a settings sweep, masked byte-exact comparison, and an **offset-stable
@@ -39,7 +41,8 @@ still differs" legible even when a one-line change shifts every jump target.
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/) (manages the Python environment).
-- [foundry](https://getfoundry.sh) (`cast`) and [heimdall](https://heimdall.rs) on `PATH`.
+- [foundry](https://getfoundry.sh) (`cast`) on `PATH`. [heimdall](https://heimdall.rs)
+  is optional (a rough higher-level sketch; the CFG-resolved `lift` is the primary scaffold).
 - solc binaries under `~/.svm/<version>/solc-<version>` (or `solc-select`) for the
   versions you target; `verifyoor` auto-installs a missing one via `solc-select` when possible.
 
@@ -138,14 +141,15 @@ immutable value slots (recovered and reported); masking library link placeholder
 
 ```sh
 uv run python tests/fixtures/generate_fixtures.py   # (re)generate fixtures
-uv run pytest                                       # 69 tests (2 gate on the external miner)
+uv run pytest                                       # 78 tests (2 gate on the external miner)
 ```
 
 The suite covers metadata parsing, the dispatcher walk (EQ/SUB forms, trampoline
 body-offset tracing), string extraction across all three solc encodings, the
 offset-stable diff, the intra-block IR lift (stack semantics, let/temp policy,
-block splitting), selector minting (both backends), evmole enrichment (arg types,
-mutability, storage layout), immutable masking, viaIR detection, and round-trips
+block splitting) with CFG edge resolution, selector minting (both backends), evmole
+enrichment (arg types, mutability, storage layout), immutable masking, viaIR
+detection, and round-trips
 of fixtures exercising structs, mappings, events, custom errors, immutables,
 optimizer-on, viaIR, and solc 0.7.6. Compile-dependent tests need the matching
 solc binaries; network-dependent name resolution is cached (`--offline` to skip).

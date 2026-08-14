@@ -16,6 +16,7 @@ from . import metadata
 from .analyze import analyze
 from .compare import Comparison, compare
 from .compile import CompileResult, Settings, compile_standard, settings_sweep
+from .cfg import Cfg
 from .decompile import decompile
 from .disasm import disassemble
 from .fetch import fetch_code
@@ -139,20 +140,23 @@ def cmd_lift(args) -> int:
     _resolve_analysis(a, use_network=not args.offline)
     md = a.metadata
     stripped = code[: md.start] if md.present else code
-    lifter = Lifter(disassemble(stripped))
+    cfg = Cfg.from_code(stripped)
+    lifter = Lifter(disassemble(stripped), cfg=cfg)
     lines = lifter.listing(selectors=a.selectors)
     text = "\n".join(lines) + "\n"
     if args.out:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
         with open(args.out, "w") as f:
             f.write(text)
-        _eprint("== lift == %d line(s) -> %s" % (len(lines), args.out))
+        _eprint("== lift == %d line(s)%s -> %s"
+                % (len(lines), " (CFG edges resolved)" if cfg else "", args.out))
     else:
         _eprint("== lift ==")
         _eprint(text)
     print(json.dumps({
         "ok": True,
         "lines": len(lines),
+        "cfg": cfg is not None,
         "out": args.out,
         "functions": [s.signature or ("selector 0x%s" % s.selector) for s in a.selectors],
     }))

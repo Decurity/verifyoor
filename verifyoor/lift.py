@@ -145,14 +145,20 @@ class LiftedBlock:
     lines: List[str]  # "0x1a4: mstore(0x40, 0x80)"
     n_inputs: int
     exit_stack: List[str] = field(default_factory=list)  # rendered, top first
+    dyn_jump_pc: Optional[int] = None  # pc of a stack-computed jump target (unresolved here)
+    resolved_succs: Optional[List[int]] = None  # CFG-resolved targets for that dynamic jump
 
-    def render(self) -> List[str]:
+    def render(self, max_succs: int = 8) -> List[str]:
         out = ["block 0x%x%s:" % (self.start_pc, " [jumpdest]" if self.is_jumpdest else "")]
         if self.n_inputs:
             out.append("  // reads %d stack input(s); in0 = top of stack at entry" % self.n_inputs)
         out.extend("  " + l for l in self.lines)
         if self.exit_stack:
             out.append("  // stack out (top first): [%s]" % ", ".join(self.exit_stack))
+        if self.resolved_succs:  # evmole resolved the stack-computed jump target(s)
+            tgts = ["0x%x" % s for s in self.resolved_succs[:max_succs]]
+            more = "" if len(self.resolved_succs) <= max_succs else " (+%d more)" % (len(self.resolved_succs) - max_succs)
+            out.append("  // dynamic jump -> %s%s  [resolved by evmole]" % (", ".join(tgts), more))
         if self.falls_through:
             out.append("  // falls through to 0x%x" % self.next_pc)
         return out
@@ -183,6 +189,7 @@ def lift_block(ops: Sequence[Op]) -> LiftedBlock:
         return stack.pop()
 
     falls_through = True
+    dyn_jump_pc = None
     for op in ops:
         name = op.name
         if name == "JUMPDEST":
@@ -224,6 +231,10 @@ def lift_block(ops: Sequence[Op]) -> LiftedBlock:
             stmts.append(_Stmt(op.pc, lname, args, _clobbers(name)))
             if name in _TERMINATORS:
                 falls_through = name == "JUMPI"
+                # a stack-computed jump target (not a PUSHed constant) is the lift's
+                # blind spot — record its pc so the CFG can resolve it.
+                if name in ("JUMP", "JUMPI") and args and args[0].kind != "const":
+                    dyn_jump_pc = op.pc
                 break
 
     exit_nodes = list(reversed(stack))  # top first
@@ -356,20 +367,32 @@ def lift_block(ops: Sequence[Op]) -> LiftedBlock:
         lines=lines,
         n_inputs=n_inputs,
         exit_stack=[render(n) for n in exit_nodes],
+        dyn_jump_pc=dyn_jump_pc,
     )
 
 
 class Lifter:
-    """Lifts blocks of one disassembled code image on demand (cached)."""
+    """Lifts blocks of one disassembled code image on demand (cached).
 
-    def __init__(self, ops: Sequence[Op]):
+    Given an optional evmole `Cfg`, each block's stack-computed jump target is
+    resolved to concrete successor pcs — turning the lift's `jump(in0)` blind spot
+    into a connected control-flow view. Every evmole block boundary aligns with a
+    lift boundary (verified), so a dynamic jump's pc maps cleanly onto its CFG block."""
+
+    def __init__(self, ops: Sequence[Op], cfg=None):
         self._blocks = split_blocks(ops)
         self._starts = [b[0].pc for b in self._blocks]
+        self._cfg = cfg
         self._cache: Dict[int, LiftedBlock] = {}
 
     def _lifted(self, i: int) -> LiftedBlock:
         if i not in self._cache:
-            self._cache[i] = lift_block(self._blocks[i])
+            lb = lift_block(self._blocks[i])
+            if self._cfg is not None and lb.dyn_jump_pc is not None:
+                succs = self._cfg.succs_at(lb.dyn_jump_pc)
+                if succs:
+                    lb.resolved_succs = sorted(succs)
+            self._cache[i] = lb
         return self._cache[i]
 
     def lift_range(self, lo_pc: int, hi_pc: int, max_blocks: int = 2,

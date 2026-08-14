@@ -88,29 +88,32 @@ Read the human summary (stderr) and JSON (stdout). Note:
   custom errors, not string literals.
 - **resolved_events / resolved_errors**: declare these with the exact signatures.
 
-### 2. Decompile (scaffold)
-```
-uv run verifyoor decompile <TARGET> --out runs/<name>/heimdall
-```
-heimdall's output is **approximate pseudocode** — never compiles as-is and often
-gets storage math, masks, and control flow wrong. Use it only to see the shape:
-state variables, function bodies, rough logic. Trust `analyze` (names + evmole arg
-types + mutability) and `lift` over it for the ABI and details; heimdall is just
-the rough-shape sketch.
-
-### 2b. Lift (deterministic IR)
+### 2. Lift (deterministic IR + resolved control flow) — the primary scaffold
 ```
 uv run verifyoor lift <TARGET> --out runs/<name>/lift.txt
 ```
-Deterministic intra-block IR: every basic block symbolically executed into
-Yul-style statements (`sstore(0x00, caller())`, `jumpi(0x151, lt(in0,
-sload(0x02)))`), grouped by function. Unlike heimdall, the intra-block facts —
-storage slots, bit masks, memory layout, call arguments — are exact, because the
-pass is deterministic and complete for EVM bytecode; only the control flow
-between blocks stays raw (`jump`/`jumpi` with literal pc targets) for you to
-stitch. `in0` is the top of the block's entry stack; the `// stack out` footer
-is what it passes to its successor. Read it alongside the heimdall scaffold:
-trust `lift` for details, heimdall for the rough overall shape.
+Every basic block is symbolically executed into Yul-style statements
+(`sstore(0x00, caller())`, `jumpi(0x151, lt(in0, sload(0x02)))`), grouped by
+function. The intra-block facts — storage slots, bit masks, memory layout, call
+arguments — are **exact** (the pass is deterministic and complete for EVM
+bytecode). The control flow *between* blocks — the lift's one blind spot, a
+stack-computed `jump(in0)` — is resolved by **evmole's CFG**: dynamic jumps
+(function returns, shared-helper dispatch) render `// dynamic jump -> 0xNNN
+[resolved by evmole]`, so the listing is a connected control-flow view, not
+disconnected fragments. `in0` is the top of the block's entry stack; the `//
+stack out` footer is what it passes to its successor. This is your main scaffold:
+accurate bodies + resolved edges + (from `analyze`) names, arg types, mutability,
+and storage layout.
+
+### 2b. Decompile (optional higher-level sketch)
+```
+uv run verifyoor decompile <TARGET> --out runs/<name>/heimdall
+```
+Optional. heimdall renders approximate pseudo-Solidity (readable `if`/assignments)
+that can convey the overall gist faster — but it **never compiles as-is and often
+gets storage math, masks, and control flow wrong**, so trust `analyze` + `lift`
+over it for anything load-bearing. Reach for it only when the CFG-resolved lift
+leaves you wanting a rougher, higher-level overview.
 
 ### 3. Author the candidate
 Write `runs/<name>/candidate.sol`:
