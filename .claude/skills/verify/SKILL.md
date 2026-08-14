@@ -63,9 +63,9 @@ Read the human summary (stderr) and JSON (stdout). Note:
   plus **evmole** `arguments` (decoded arg types) and `state_mutability`
   (`view`/`pure`/`payable`/`nonpayable`) per selector. Use the arg types to author
   correct parameter lists and the mutability for `view`/`payable` markers.
-  `UNRESOLVED` means openchain has no verified name — analyze prints a ready
-  `mine-selector` command with evmole's arg types; see *Unresolved selectors* below.
-  A **⚠ DB-name collision** line means openchain resolved a name whose arg types
+  `UNRESOLVED` means the Sourcify 4byte DB has no verified name — analyze prints a
+  ready `mine-selector` command with evmole's arg types; see *Unresolved selectors*.
+  A **⚠ DB-name collision** line means the signature DB resolved a name whose arg types
   disagree with evmole's decode (a wrong 4-byte preimage, e.g. `transfer(address,
   uint256)` on a function that really takes four arrays) — **discard that name**,
   author from evmole's arg types, and mint the selector.
@@ -209,8 +209,9 @@ that changes codegen). A precise partial result beats a fabricated "match".
 - Bytecode is fetched once via `eth_getCode` and cached in
   `~/.cache/verifyoor/bytecode`; `--no-cache` forces a refetch, `--rpc-url`
   overrides the endpoint. Unknown network alias → the error lists valid ones.
-- `analyze`/`verify` also hit openchain for name resolution (cached in
-  `~/.cache/verifyoor`); add `--offline` to skip that lookup once names are cached.
+- `analyze`/`verify` also hit the Sourcify 4byte DB (`api.4byte.sourcify.dev`) for
+  name resolution (cached in `~/.cache/verifyoor`; `$VERIFYOOR_SIGDB_URL` overrides
+  the endpoint); add `--offline` to skip that lookup once names are cached.
 - Metadata with no solc version (old contracts or stripped builds): pass `--solc`
   yourself, sweeping versions newest→oldest guided by the `evm floor` /
   `solc floor` in `analyze`.

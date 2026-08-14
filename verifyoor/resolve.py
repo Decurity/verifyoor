@@ -1,8 +1,12 @@
-"""Resolve function selectors and event topics via the openchain.xyz signature DB.
+"""Resolve function selectors and event topics via Sourcify's 4byte signature DB.
 
-Every hit is rehash-verified (keccak(sig)[:4/full] must equal the queried hash),
-because the DB contains user-submitted garbage and outright collisions. Results
-are cached on disk so repeat runs and tests are offline-fast.
+Uses `api.4byte.sourcify.dev` — the Sourcify-maintained public-good database that
+took over openchain.xyz's 4byte API (same schema, same domain). It exposes a
+`hasVerifiedContract` flag per signature; we rank those first, since a name that
+appears in a verified contract is far likelier to be the real one than 4byte spam.
+Every hit is still rehash-verified (keccak(sig)[:4/full] must equal the queried
+hash). Results are cached on disk so repeat runs and tests are offline-fast.
+Override the endpoint with $VERIFYOOR_SIGDB_URL (e.g. the api.openchain.xyz mirror).
 """
 from __future__ import annotations
 
@@ -16,7 +20,8 @@ from .util import keccak256
 
 _CACHE_DIR = os.path.expanduser("~/.cache/verifyoor")
 _CACHE_FILE = os.path.join(_CACHE_DIR, "signatures.json")
-_API = "https://api.openchain.xyz/signature-database/v1/lookup"
+_API = os.environ.get("VERIFYOOR_SIGDB_URL",
+                      "https://api.4byte.sourcify.dev/signature-database/v1/lookup")
 
 
 def _load_cache() -> Dict[str, Dict[str, List[str]]]:
@@ -51,7 +56,7 @@ def _normalize(kind: str, h: str) -> str:
     return h.zfill(8) if kind == "function" else h.zfill(64)
 
 
-def _query_openchain(kind: str, hashes: List[str], timeout: int) -> Dict[str, List[str]]:
+def _query_sigdb(kind: str, hashes: List[str], timeout: int) -> Dict[str, List[str]]:
     param = "function" if kind == "function" else "event"
     prefixed = ["0x" + h for h in hashes]
     url = _API + "?" + urllib.parse.urlencode({param: ",".join(prefixed)})
@@ -61,8 +66,10 @@ def _query_openchain(kind: str, hashes: List[str], timeout: int) -> Dict[str, Li
     result = data.get("result", {}).get(param, {}) or {}
     out: Dict[str, List[str]] = {}
     for key, matches in result.items():
-        names = [m.get("name", "") for m in (matches or []) if m.get("name")]
-        out[key.lower().removeprefix("0x")] = names
+        ms = [m for m in (matches or []) if m.get("name")]
+        # verified-contract names first (stable within groups) — best real-name signal
+        ms.sort(key=lambda m: not m.get("hasVerifiedContract", False))
+        out[key.lower().removeprefix("0x")] = [m["name"] for m in ms]
     return out
 
 
@@ -79,7 +86,7 @@ def resolve(kind: str, hashes: Iterable[str], timeout: int = 15, use_network: bo
 
     if missing and use_network:
         try:
-            fetched = _query_openchain(kind, missing, timeout)
+            fetched = _query_sigdb(kind, missing, timeout)
             for h in missing:
                 bucket[h] = fetched.get(h, [])
             _save_cache(cache)

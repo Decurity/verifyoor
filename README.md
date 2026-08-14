@@ -17,8 +17,9 @@ Two layers:
 1. **Deterministic toolkit** (`verifyoor …`) — all the mechanical work: CBOR
    metadata parsing, disassembly, **evmole**-primary selector / argument-type /
    state-mutability extraction with trampoline body-offset tracing (a built-in
-   dispatcher walk is the fallback), openchain signature resolution (rehash-verified,
-   with evmole **collision** flagging — a resolved name whose decoded args disagree),
+   dispatcher walk is the fallback), **Sourcify** 4byte signature resolution
+   (rehash-verified, verified-contract names ranked first; with evmole **collision**
+   flagging — a resolved name whose decoded args disagree),
    heimdall decompilation, an **intra-block IR lift** (per-basic-block symbolic stack
    execution into Yul-style statements — deterministic and complete for EVM
    bytecode, surfaced standalone via `lift` and inline in every diff region),

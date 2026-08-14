@@ -15,7 +15,7 @@ _PRINTABLE = set(_string.printable) - set("\x0b\x0c")
 class SelectorEntry:
     selector: str  # 8 hex chars, no 0x
     body_offset: int
-    signature: Optional[str] = None  # filled by resolve step (openchain)
+    signature: Optional[str] = None  # filled by resolve step (Sourcify 4byte DB)
     arguments: Optional[str] = None  # canonical arg types from evmole, e.g. "address,uint256"
     state_mutability: Optional[str] = None  # "pure"|"view"|"payable"|"nonpayable" from evmole
 
@@ -23,7 +23,7 @@ class SelectorEntry:
     def db_name_conflict(self) -> bool:
         """True when the DB-resolved name's arg types disagree with evmole's.
 
-        A 4-byte selector has many preimages, so an openchain hit can be the wrong
+        A 4-byte selector has many preimages, so a signature-DB hit can be the wrong
         one (e.g. `transfer(address,uint256)` for a function whose bytecode actually
         decodes four arrays). When evmole's decoded arg types don't match the
         resolved signature's, the name is a collision — mint from evmole's types."""

@@ -354,7 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("target", nargs="+", help=src_help)
     pa.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
     pa.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
-    pa.add_argument("--offline", action="store_true", help="skip openchain network lookups")
+    pa.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
     pa.set_defaults(func=cmd_analyze)
 
     pd = sub.add_parser("decompile", help="heimdall decompile wrapper")
@@ -378,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("target", nargs="+", help=src_help)
     pl.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
     pl.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
-    pl.add_argument("--offline", action="store_true", help="skip openchain network lookups")
+    pl.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
     pl.add_argument("--out", help="write the listing to a file (else stderr)")
     pl.set_defaults(func=cmd_lift)
 
@@ -394,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--via-ir", action="store_true")
     pv.add_argument("--sweep", action="store_true", help="sweep optimizer/evm/viaIR until match")
     pv.add_argument("--out", help="artifacts output directory (on match)")
-    pv.add_argument("--offline", action="store_true", help="skip openchain network lookups")
+    pv.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
     pv.set_defaults(func=cmd_verify)
 
     ps = sub.add_parser("submit", help="submit a verified run dir to Etherscan/Sourcify (standard-json)")
