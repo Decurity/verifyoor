@@ -77,6 +77,20 @@ heimdall's output is **approximate pseudocode** — never compiles as-is and oft
 gets storage math, masks, and control flow wrong. Use it only to see the shape:
 state variables, function bodies, rough logic. Trust `analyze` over it for names.
 
+### 2b. Lift (deterministic IR)
+```
+uv run verifyoor lift <TARGET> --out runs/<name>/lift.txt
+```
+Deterministic intra-block IR: every basic block symbolically executed into
+Yul-style statements (`sstore(0x00, caller())`, `jumpi(0x151, lt(in0,
+sload(0x02)))`), grouped by function. Unlike heimdall, the intra-block facts —
+storage slots, bit masks, memory layout, call arguments — are exact, because the
+pass is deterministic and complete for EVM bytecode; only the control flow
+between blocks stays raw (`jump`/`jumpi` with literal pc targets) for you to
+stitch. `in0` is the top of the block's entry stack; the `// stack out` footer
+is what it passes to its successor. Read it alongside the heimdall scaffold:
+trust `lift` for details, heimdall for the rough overall shape.
+
 ### 3. Author the candidate
 Write `runs/<name>/candidate.sol`:
 - `pragma solidity <exact metadata version>;` (e.g. `0.8.20`).
@@ -101,8 +115,12 @@ uv run verifyoor verify runs/<name>/candidate.sol <TARGET> --sweep --out runs/<n
 
 ### 5. Read the diff and fix exactly what differs
 On mismatch the JSON lists divergent **regions**, each attributed to a function
-with `expected` (on-chain / correct) vs `got` (your candidate) opcode tokens.
-Decode `PUSH32 0x…` hex to ASCII to read string literals. Interpretation guide:
+with `expected` (on-chain / correct) vs `got` (your candidate) opcode tokens,
+plus `expected_ir` / `got_ir`: the enclosing basic block(s) lifted to the same
+Yul-style IR as `lift`. **Read the IR first** — a missing `require` is a missing
+`jumpi(…)` statement, a wrong constant sits visibly in place, and printable
+constants carry an inline `/* "…" */` ASCII decode — then use the token stream
+for byte-width detail. Interpretation guide (token-level signals):
 
 | Diff signal | Likely cause → fix |
 |---|---|
@@ -139,15 +157,32 @@ Add `--constructor-args <hex>` if the contract's constructor takes arguments.
 
 ## Unresolved selectors
 
-The function name must keccak to the selector or the dispatcher bytes won't match.
-If `analyze` shows `UNRESOLVED`:
-1. Infer a plausible name from the decompiled body and parameter types, write it,
-   and verify — a wrong guess shows as a dispatcher-region diff (the `PUSH4
-   <selector>` comparison), so you'll know immediately.
-2. Common patterns: getters mirror state var names; proxy/ERC standards
-   (`implementation()`, `owner()`, `balanceOf(address)`).
-3. If unrecoverable, name it `func_<selector>` and note in the report that its
-   name is unverified — every *resolved* function can still match exactly.
+The function's declared selector must equal the observed one or the dispatcher
+bytes won't match. **You do not need the real name** — a function's name never
+appears in runtime bytecode, only its 4-byte selector does. So any name with the
+**correct arg types** that hashes to the selector yields byte-identical code.
+
+1. First try to infer a plausible real name (getters mirror state-var names;
+   ERC/proxy standards like `owner()`, `balanceOf(address)`), write it, and verify.
+2. **The arg types are what matter — read them off the lift IR, not the DB name.**
+   A signature-DB "resolved" name can be a *wrong* selector collision (4 bytes → many
+   preimages): e.g. a body that does `mload(in0)`/`eq(mload(in1),mload(in0))` takes
+   **arrays**, so a resolved `transfer(address,uint256)` is bogus — the real function
+   is `(…[],…[])`. Head-slot count in the decoder (`calldataload(add(inN,0x00/0x20/…))`)
+   gives the exact arg count; element masks (`and(0xffff…ff, …)` = address) give types.
+3. If the name is unrecoverable, **mint one for the exact selector** with the arg
+   types you read from the IR:
+   ```
+   uv run verifyoor mine-selector 0x2247831f "(address[],uint256[])"
+   ```
+   This returns a plain `func_<selector>_<n>(...)` name whose selector equals the
+   target. Use it verbatim as the function name — the body still needs the correct
+   arg types and logic, but the dispatcher bytes now match exactly. Note in the
+   report that the *name* is synthetic (the selector and behavior are exact).
+   Mining searches a ~2^32 keccak space; it auto-uses the fast external backend
+   (Vectorized's `function-selector-miner`, sub-minute on an x86+AVX2 host) when
+   present, else a pure-Python fallback (see README "Selector mining"). Every
+   result is re-verified with keccak, so a minted name is always exact.
 
 ## Stop-loss
 
