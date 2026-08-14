@@ -158,6 +158,23 @@ for byte-width detail. Interpretation guide (token-level signals):
 Edit `candidate.sol` (save iterations as `candidate_2.sol`, … for debugging) and
 return to step 4. The diff shrinks region-by-region as you converge.
 
+### 5b. Sweep source variants (when a region has a few equivalent codegens)
+When a divergence comes down to *how* to write something — inline vs a factored
+`private` helper, assembly `sload(SLOT)` vs `StorageSlot.getAddressSlot(SLOT).value`,
+a raw `sstore` vs a high-level assignment, an interface call vs a low-level
+`staticcall` — don't hand-test each. Mark the choices in the source with
+`<<< optionA ||| optionB >>>` and let the toolkit compile the whole grid
+(variants × settings), stopping at the first byte-exact match:
+```
+uv run verifyoor sweep runs/<name>/template.sol <TARGET> --out runs/<name>
+```
+It ranks non-matches by normalized-diff **region count** (the true "closeness",
+since a length mismatch zeroes the byte diff) and writes the closest variant to
+`closest.sol` for the next round. Bound the blow-up with `--max-variants`; pin
+`--optimizer on:RUNS` (etc.) once settings are known to keep it fast. Reach for
+this on the last mile — the handful of equivalent source shapes for one stubborn
+region — not for large structural rewrites.
+
 ### 6. On match
 `verify` writes `source.sol`, `settings.json`, `standard-input.json`, and
 `report.{json,md}` to `runs/<name>/`. Confirm and summarize for the user:
