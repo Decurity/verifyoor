@@ -2,18 +2,31 @@
 
 A one-byte source change shifts every downstream jump target, so a raw byte or
 naive opcode diff drowns the real change in noise. We normalize each PUSH whose
-immediate is a valid JUMPDEST into a symbolic label (indexed by sorted-jumpdest
-order), leaving semantic immediates (selectors, constants, string data) literal.
-Then difflib localizes the genuine divergences, and each is attributed to the
-enclosing function via the selector->body-offset map.
+immediate is a valid JUMPDEST into a symbolic label, leaving semantic immediates
+(selectors, constants, string data) literal.
+
+Two failure modes then remain that a single global `difflib` pass hits:
+  - a length change inside one function desyncs the alignment of *every* later
+    function, printing phantom regions in code that's actually byte-identical;
+  - the "got" side of such a phantom region belongs to a shifted, unrelated part of
+    the candidate, so its attribution is wrong too.
+So by default we diff **each function independently**: partition both images into
+per-function token streams (keyed by the owning function's 4-byte selector via the
+context-sensitive CFG, so a target function pairs with its candidate counterpart
+despite different body offsets), and run difflib per bucket. A length change is then
+contained to its own function; every other function diffs cleanly. Shared helpers
+and the dispatcher/prologue are their own buckets. Falls back to the global pass
+when a CFG isn't available for both sides.
 """
 from __future__ import annotations
 
 import difflib
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
-from .analyze import SelectorEntry
+from .analyze import SelectorEntry, walk_dispatcher
+from .cfg import Attributor, Cfg
 from .disasm import Op, disassemble, jumpdests
 from .lift import Lifter
 
@@ -87,50 +100,161 @@ class NormDiff:
         return "\n".join(lines)
 
 
-def diff(target_code: bytes, candidate_code: bytes, selectors: Optional[List[SelectorEntry]] = None,
-         lift_ir: bool = True) -> NormDiff:
-    selectors = selectors or []
-    t_tokens, t_ops = normalize_tokens(target_code)
-    c_tokens, c_ops = normalize_tokens(candidate_code)
+def _region_pc(t_ops: List[Op], t_idx: List[int], i1: int, i2: int) -> int:
+    """Target pc to anchor a region: its first target op, or (for a pure insertion)
+    the op just before the insertion point, or the bucket's first op."""
+    if i2 > i1:
+        return t_ops[t_idx[i1]].pc
+    if i1 > 0:
+        return t_ops[t_idx[i1 - 1]].pc
+    return t_ops[t_idx[0]].pc if t_idx else 0
 
-    # pc of each target token, to attribute regions to functions
-    t_pcs = [op.pc for op in t_ops]
 
+def _regions_for_bucket(
+    t_tokens: List[str], t_idx: List[int], t_ops: List[Op],
+    c_tokens: List[str], c_idx: List[int], c_ops: List[Op],
+    label_at: Callable[[int], str],
+    t_lifter: Optional[Lifter], c_lifter: Optional[Lifter],
+) -> List[RegionDiff]:
+    """difflib over one bucket's (target, candidate) token subsequences.
+
+    `t_idx`/`c_idx` map bucket-local token positions back to original op indices, so
+    regions carry real pcs and lift back to real blocks. `label_at(pc)` names the
+    region (a fixed function name per bucket, or the per-pc attribution in the global
+    fallback)."""
     sm = difflib.SequenceMatcher(a=t_tokens, b=c_tokens, autojunk=False)
     regions: List[RegionDiff] = []
-    t_lifter: Optional[Lifter] = None
-    c_lifter: Optional[Lifter] = None
-    attributor = None
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             continue
-        if attributor is None:
-            from .cfg import Attributor, Cfg
-            # one CFG of the target drives edge resolution and context-sensitive
-            # attribution: a divergence in genuinely shared code reads "shared helper",
-            # while function-specific codegen stays attributed to its function
-            t_cfg = Cfg.from_code(target_code)
-            attributor = Attributor(t_cfg, selectors)
-            if lift_ir:
-                t_lifter = Lifter(t_ops, cfg=t_cfg)
-                c_lifter = Lifter(c_ops)
-        pc = t_pcs[i1] if i1 < len(t_pcs) else (t_pcs[-1] if t_pcs else 0)
-        regions.append(
-            RegionDiff(
-                tag=tag,
-                target_pc=pc,
-                function=attributor.attribute(pc),
-                expected=t_tokens[i1:i2],
-                got=c_tokens[j1:j2],
-                expected_ir=(t_lifter.lift_range(t_ops[i1].pc, t_ops[i2 - 1].pc)
-                             if lift_ir and i2 > i1 else []),
-                got_ir=(c_lifter.lift_range(c_ops[j1].pc, c_ops[j2 - 1].pc)
-                        if lift_ir and j2 > j1 else []),
-            )
-        )
+        pc = _region_pc(t_ops, t_idx, i1, i2)
+        exp_ir = (t_lifter.lift_range(t_ops[t_idx[i1]].pc, t_ops[t_idx[i2 - 1]].pc)
+                  if t_lifter is not None and i2 > i1 else [])
+        got_ir = (c_lifter.lift_range(c_ops[c_idx[j1]].pc, c_ops[c_idx[j2 - 1]].pc)
+                  if c_lifter is not None and j2 > j1 else [])
+        regions.append(RegionDiff(
+            tag=tag, target_pc=pc, function=label_at(pc),
+            expected=t_tokens[i1:i2], got=c_tokens[j1:j2],
+            expected_ir=exp_ir, got_ir=got_ir,
+        ))
+    return regions
+
+
+def _bucket(keys: List[str]) -> "OrderedDict[str, List[int]]":
+    """key -> list of token indices, preserving first-seen key order."""
+    out: "OrderedDict[str, List[int]]" = OrderedDict()
+    for i, k in enumerate(keys):
+        out.setdefault(k, []).append(i)
+    return out
+
+
+def _display_name(key: str, target_selectors: List[SelectorEntry]) -> str:
+    if key == Attributor.SHARED:
+        return "shared helper"
+    if key == Attributor.PROLOGUE:
+        return "dispatcher/prologue"
+    if key.startswith("0x"):
+        sel = key[2:]
+        for s in target_selectors:
+            if s.selector == sel:
+                return s.signature or "selector 0x%s" % sel
+        return "selector 0x%s" % sel
+    return key
+
+
+def _diff_per_function(
+    target_code: bytes, candidate_code: bytes, selectors: List[SelectorEntry],
+    t_cfg: Cfg, c_cfg: Cfg, lift_ir: bool,
+) -> NormDiff:
+    t_tokens, t_ops = normalize_tokens(target_code)
+    c_tokens, c_ops = normalize_tokens(candidate_code)
+
+    t_attr = Attributor(t_cfg, selectors)
+    # The candidate's function bodies sit at shifted offsets; recover its own dispatcher
+    # entries (pure, no network/evmole) so its blocks key on the same selectors.
+    c_selectors = walk_dispatcher(c_ops)
+    c_attr = Attributor(c_cfg, c_selectors)
+
+    t_keys = [t_attr.key(op.pc) for op in t_ops]
+    c_keys = [c_attr.key(op.pc) for op in c_ops]
+    t_buckets = _bucket(t_keys)
+    c_buckets = _bucket(c_keys)
+
+    t_lifter = Lifter(t_ops, cfg=t_cfg) if lift_ir else None
+    c_lifter = Lifter(c_ops, cfg=c_cfg) if lift_ir else None
+
+    regions: List[RegionDiff] = []
+    for key in list(t_buckets.keys()) + [k for k in c_buckets if k not in t_buckets]:
+        t_ix = t_buckets.get(key, [])
+        c_ix = c_buckets.get(key, [])
+        t_sub = [t_tokens[i] for i in t_ix]
+        c_sub = [c_tokens[i] for i in c_ix]
+        if t_sub == c_sub:
+            continue
+        name = _display_name(key, selectors)
+        regions.extend(_regions_for_bucket(
+            t_sub, t_ix, t_ops, c_sub, c_ix, c_ops,
+            label_at=lambda _pc, _n=name: _n,
+            t_lifter=t_lifter, c_lifter=c_lifter,
+        ))
+
+    regions.sort(key=lambda r: r.target_pc)
     return NormDiff(
         match=not regions,
         length_delta=len(c_tokens) - len(t_tokens),
         region_count=len(regions),
         regions=regions,
     )
+
+
+def _diff_global(
+    target_code: bytes, candidate_code: bytes, selectors: List[SelectorEntry], lift_ir: bool,
+) -> NormDiff:
+    """Single global difflib pass with per-pc attribution — the fallback when a CFG
+    isn't available for both sides (attribution/regions can cascade past a length
+    change; that's the limitation per-function diffing removes)."""
+    t_tokens, t_ops = normalize_tokens(target_code)
+    c_tokens, c_ops = normalize_tokens(candidate_code)
+    t_idx = list(range(len(t_ops)))
+    c_idx = list(range(len(c_ops)))
+
+    # Prime the attributor/lifters only if there is at least one divergence.
+    sm = difflib.SequenceMatcher(a=t_tokens, b=c_tokens, autojunk=False)
+    if all(tag == "equal" for tag, *_ in sm.get_opcodes()):
+        return NormDiff(True, len(c_tokens) - len(t_tokens), 0, [])
+
+    t_cfg = Cfg.from_code(target_code)
+    attributor = Attributor(t_cfg, selectors)
+    t_lifter: Optional[Lifter] = None
+    c_lifter: Optional[Lifter] = None
+    if lift_ir:
+        t_lifter = Lifter(t_ops, cfg=t_cfg)
+        c_lifter = Lifter(c_ops)
+    regions = _regions_for_bucket(
+        t_tokens, t_idx, t_ops, c_tokens, c_idx, c_ops,
+        label_at=attributor.attribute, t_lifter=t_lifter, c_lifter=c_lifter,
+    )
+    return NormDiff(
+        match=not regions,
+        length_delta=len(c_tokens) - len(t_tokens),
+        region_count=len(regions),
+        regions=regions,
+    )
+
+
+def diff(target_code: bytes, candidate_code: bytes, selectors: Optional[List[SelectorEntry]] = None,
+         lift_ir: bool = True, per_function: bool = True) -> NormDiff:
+    """Normalized, function-attributed diff of two runtime images.
+
+    Diffs each function independently when a CFG is available for both sides (the
+    default — it contains a length change to its own function). Set
+    `per_function=False`, or when either CFG is unavailable, to use the single global
+    pass. `lift_ir=False` skips the per-region IR (cheaper; used for sweep ranking).
+    """
+    selectors = selectors or []
+    if per_function and selectors:
+        t_cfg = Cfg.from_code(target_code)
+        c_cfg = Cfg.from_code(candidate_code)
+        if t_cfg is not None and c_cfg is not None:
+            return _diff_per_function(target_code, candidate_code, selectors, t_cfg, c_cfg, lift_ir)
+    return _diff_global(target_code, candidate_code, selectors, lift_ir)

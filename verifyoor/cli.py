@@ -493,9 +493,10 @@ def cmd_sweep(args) -> int:
                 return 0
             # rank by normalized-diff region count — the true "closeness" (diff_bytes
             # is 0 on any length mismatch, so it can't rank near-misses). lift_ir=False
-            # keeps this cheap (region count only, no IR). Ties break on byte length.
+            # and per_function=False keep this cheap (region count only, no IR, no
+            # per-variant candidate CFG) — the fast global pass suffices for ranking.
             nd = diff(cmp.input_image or tstrip, cmp.compiled_image, a.selectors,
-                      lift_ir=False) if cmp.compiled_image else None
+                      lift_ir=False, per_function=False) if cmp.compiled_image else None
             clen = len(cmp.compiled_image) if cmp.compiled_image else 0
             key = (nd.region_count if nd else 1 << 30, abs(clen - len(tstrip)))
             if best is None or key < best[0]:
