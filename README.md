@@ -26,10 +26,13 @@ Two layers:
      **evmole's CFG**. Surfaced standalone via `lift` and inline in every diff region.
    - **Compile & compare** — pinned-solc compilation with a settings sweep, masked
      byte-exact comparison.
-   - **Diff** — an offset-stable normalized-disassembly diff; each divergence is
-     attributed to a specific function via **context-sensitive CFG** analysis (a
-     divergence in genuinely shared codegen reads `shared helper` instead of being
-     misattributed to a neighboring function).
+   - **Diff** — an offset-stable normalized-disassembly diff, run **per function**:
+     both images are partitioned by the owning function's selector (via
+     **context-sensitive CFG** analysis) and diffed bucket-by-bucket, so a length
+     change in one function can't desync or misattribute regions in another. A
+     divergence in genuinely shared codegen reads `shared helper`; the dispatcher
+     is its own bucket. (Falls back to a single global pass when a CFG isn't
+     available for both sides.)
    - **Brute-force the last mile** — a source-variant sweep (`sweep`: expand a
      templated candidate's `<<< a ||| b >>>` markers across all variants ×
      settings, ranked by diff-region count, until byte-exact) and a

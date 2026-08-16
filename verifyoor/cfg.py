@@ -150,10 +150,15 @@ class Attributor:
     falling back to the offset heuristic when there's no CFG or the block is unreached
     from any function (dispatcher/prologue/dead code)."""
 
+    #: bucket keys for the two non-function ownerships (see `key`).
+    SHARED = "__shared__"
+    PROLOGUE = "__prologue__"
+
     def __init__(self, cfg: Optional[Cfg], selectors):
         self._cfg = cfg
         self._selectors = list(selectors)
         self._name = {s.body_offset: (s.signature or "selector 0x%s" % s.selector) for s in selectors}
+        self._sel_of = {s.body_offset: s.selector for s in selectors}
         self._entry_of = {}
         self._owner = {}
         if cfg is not None:
@@ -162,6 +167,18 @@ class Attributor:
                 if blk is not None:
                     self._entry_of[blk.start] = s.body_offset
             self._owner = cfg.function_owners([s.body_offset for s in selectors])
+
+    def _owner_body_offset(self, pc: int) -> Optional[int]:
+        """The single owning function's body offset, or None (shared/prologue/no-cfg)."""
+        if self._cfg is None:
+            return None
+        blk = self._cfg.block_at(pc)
+        if blk is None:
+            return None
+        owners = self._owner.get(blk.start)
+        if owners and len(owners) == 1:
+            return self._entry_of[next(iter(owners))]
+        return None
 
     def attribute(self, pc: int) -> str:
         from .analyze import attribute_function
@@ -180,3 +197,23 @@ class Attributor:
                 if first is not None:
                     return "dispatcher/prologue" if pc < first else "shared helper"
         return attribute_function(pc, self._selectors)
+
+    def key(self, pc: int) -> str:
+        """A side-independent bucket key for `pc`: the owning function's 4-byte
+        selector ('0x<sel>'), or SHARED / PROLOGUE. Unlike `attribute` (a display
+        name), this keys on the selector so a target function and its candidate
+        counterpart land in the same bucket despite different body offsets — the basis
+        for diffing each function independently instead of one global, cascade-prone
+        alignment."""
+        if self._cfg is not None:
+            blk = self._cfg.block_at(pc)
+            if blk is not None:
+                owners = self._owner.get(blk.start)
+                if owners and len(owners) == 1:
+                    return "0x" + self._sel_of[self._entry_of[next(iter(owners))]]
+                if owners and len(owners) > 1:
+                    return self.SHARED
+                first = min((s.body_offset for s in self._selectors), default=None)
+                if first is not None:
+                    return self.PROLOGUE if pc < first else self.SHARED
+        return self.SHARED

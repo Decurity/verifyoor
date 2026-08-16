@@ -128,11 +128,14 @@ uv run verifyoor verify runs/<name>/candidate.sol <TARGET> --sweep --out runs/<n
 - Exit **0 = match** (artifacts written to `runs/<name>/`), **1 = mismatch**.
 
 ### 5. Read the diff and fix exactly what differs
-On mismatch the JSON lists divergent **regions**, each attributed to a function
-(via context-sensitive CFG analysis — a region in genuinely shared codegen reads
-`shared helper`, meaning the fix is in code *several* functions share, e.g. a
-common encode/return helper: make all call sites the same shape rather than
-editing one function) with `expected` (on-chain / correct) vs `got` (your
+On mismatch the JSON lists divergent **regions**. The diff runs **per function** —
+both images are partitioned by the owning function's selector (context-sensitive CFG
+analysis) and diffed independently, so a length change in one function never desyncs
+or spills phantom regions into another; each region's `function` is therefore exact.
+A region in genuinely shared codegen reads `shared helper` (the fix is in code
+*several* functions share, e.g. a common encode/return helper: make all call sites
+the same shape rather than editing one function). Each region carries `expected`
+(on-chain / correct) vs `got` (your
 candidate) opcode tokens, plus `expected_ir` / `got_ir`: the enclosing block(s)
 lifted to the same
 Yul-style IR as `lift`. **Read the IR first** — a missing `require` is a missing
