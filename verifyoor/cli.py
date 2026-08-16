@@ -61,6 +61,15 @@ def _etherscan_key(args) -> Optional[str]:
     return getattr(args, "api_key", None) or os.environ.get("ETHERSCAN_API_KEY")
 
 
+def _distinct_hints(regions) -> List[str]:
+    """Recognized-pattern fix suggestions across regions, de-duped in first-seen order."""
+    out: List[str] = []
+    for r in regions:
+        if r.hint and r.hint not in out:
+            out.append(r.hint)
+    return out
+
+
 def _fmt_writes(writes) -> str:
     out = []
     for w in writes:
@@ -342,6 +351,11 @@ def cmd_verify(args) -> int:
         _eprint(nd.summary())
     cap = args.max_regions
     total = nd.region_count if nd else 0
+    hints = _distinct_hints(nd.regions) if nd else []
+    if hints:
+        _eprint("recognized patterns → likely fixes:")
+        for h in hints:
+            _eprint("  • %s" % h)
     mismatch = {
         "match": False,
         "reason": best.reason,
@@ -350,9 +364,10 @@ def cmd_verify(args) -> int:
         "length_delta_opcodes": nd.length_delta if nd else None,
         "total_regions": total,
         "regions_truncated": total > cap,
+        "hints": hints,
         "regions": [
             {"tag": r.tag, "pc": r.target_pc, "function": r.function, "expected": r.expected[:16], "got": r.got[:16],
-             "expected_ir": r.expected_ir, "got_ir": r.got_ir}
+             "hint": r.hint, "expected_ir": r.expected_ir, "got_ir": r.got_ir}
             for r in (nd.regions[:cap] if nd else [])
         ],
         "unresolved_selectors": unresolved,
@@ -737,9 +752,10 @@ def cmd_diff_asm(args) -> int:
             "length_delta_opcodes": nd.length_delta,
             "total_regions": nd.region_count,
             "shown_regions": len(regions),
+            "hints": _distinct_hints(regions),
             "regions": [
                 {"tag": r.tag, "pc": r.target_pc, "function": r.function,
-                 "expected": r.expected[:16], "got": r.got[:16],
+                 "expected": r.expected[:16], "got": r.got[:16], "hint": r.hint,
                  "expected_ir": r.expected_ir, "got_ir": r.got_ir}
                 for r in regions[:args.max_regions]
             ],

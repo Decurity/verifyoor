@@ -141,7 +141,16 @@ lifted to the same
 Yul-style IR as `lift`. **Read the IR first** — a missing `require` is a missing
 `jumpi(…)` statement, a wrong constant sits visibly in place, and printable
 constants carry an inline `/* "…" */` ASCII decode — then use the token stream
-for byte-width detail. Interpretation guide (token-level signals):
+for byte-width detail.
+
+**Check the `hints` first.** When a region matches a known codegen pattern the
+toolkit attaches a `hint` (and collects distinct ones into a top-level `hints`
+list + a "recognized patterns → likely fixes" stderr block) naming the source-level
+fix directly — currently: selector-encoding (`abi.encodeWithSelector(0x…, …)` raw
+literal vs a `bytes4(0x…)` cast), unchecked-vs-checked increment (`unchecked { }`),
+and custom-error vs `require("…")`. A hint is a strong lead, not a guarantee —
+confirm against the IR. Interpretation guide for everything not auto-detected
+(token-level signals):
 
 | Diff signal | Likely cause → fix |
 |---|---|
