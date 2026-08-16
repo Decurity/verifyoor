@@ -72,3 +72,10 @@ def disassemble(code: bytes) -> List[Op]:
 def jumpdests(code: bytes) -> Set[int]:
     """Valid JUMPDEST pcs under EVM semantics (push-data excluded)."""
     return {op.pc for op in disassemble(code) if op.opcode == 0x5B}
+
+
+def render_range(code: bytes, lo: Optional[int] = None, hi: Optional[int] = None) -> List[str]:
+    """`pc: OPCODE [imm]` lines for ops whose pc is in [lo, hi) (defaults: whole code)."""
+    lo = 0 if lo is None else lo
+    hi = len(code) if hi is None else hi
+    return ["0x%04x  %s" % (op.pc, op) for op in disassemble(code) if lo <= op.pc < hi]

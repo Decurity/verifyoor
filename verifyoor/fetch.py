@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.parse
 import urllib.request
 from typing import Optional
 
@@ -86,6 +87,69 @@ def _rpc_get_code(url: str, address: str, timeout: int) -> str:
     if "error" in data:
         raise RuntimeError("RPC error: %s" % data["error"])
     return data.get("result", "0x")
+
+
+_ETHERSCAN_V2 = "https://api.etherscan.io/v2/api"
+
+
+def fetch_creation(
+    network: str,
+    address: str,
+    api_key: str,
+    timeout: int = 30,
+    use_cache: bool = True,
+) -> bytes:
+    """Return the creation (deployment) bytecode for `address`.
+
+    eth_getCode only returns runtime code; the constructor init-code lives solely in
+    the deployment transaction. Etherscan's v2 `getcontractcreation` returns the full
+    creation bytecode directly, which is what Etherscan verification actually matches
+    against — so this is required to catch constructor mismatches a runtime-only match
+    can't see (e.g. a constructor storage init that never appears in runtime code).
+    """
+    if not is_address(address):
+        raise ValueError("invalid address %r (expected 0x + 40 hex chars)" % address)
+
+    cache = _cache_path(network, address).replace(".hex", ".creation.hex")
+    if use_cache and os.path.isfile(cache):
+        with open(cache) as f:
+            hexstr = f.read().strip()
+        if hexstr and hexstr != "0x":
+            return bytes.fromhex(hexstr[2:] if hexstr.startswith("0x") else hexstr)
+
+    from .submit import chain_id_for  # local import: avoids a module import cycle
+    chainid = chain_id_for(network)
+    q = urllib.parse.urlencode({
+        "chainid": str(chainid), "module": "contract", "action": "getcontractcreation",
+        "contractaddresses": address, "apikey": api_key,
+    })
+    req = urllib.request.Request(
+        _ETHERSCAN_V2 + "?" + q, headers={"User-Agent": "verifyoor"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.load(resp)
+    result = data.get("result")
+    if str(data.get("status")) != "1" or not result:
+        raise RuntimeError(
+            "Etherscan getcontractcreation failed for %s on chain %d: %s"
+            % (address, chainid, data.get("result") or data.get("message"))
+        )
+    row = result[0] if isinstance(result, list) else result
+    code_hex = row.get("creationBytecode")
+    if not code_hex or code_hex == "0x":
+        raise RuntimeError(
+            "Etherscan returned no creationBytecode for %s (older API tier, or a "
+            "factory-deployed contract whose creation code isn't a plain tx)" % address
+        )
+    code = bytes.fromhex(code_hex[2:] if code_hex.startswith("0x") else code_hex)
+    if use_cache:
+        try:
+            os.makedirs(_CACHE_DIR, exist_ok=True)
+            with open(cache, "w") as f:
+                f.write("0x" + code.hex())
+        except OSError:
+            pass
+    return code
 
 
 def fetch_code(
