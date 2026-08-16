@@ -28,6 +28,7 @@ from typing import Callable, List, Optional, Tuple
 from .analyze import SelectorEntry, walk_dispatcher
 from .cfg import Attributor, Cfg
 from .disasm import Op, disassemble, jumpdests
+from .hints import hint_for
 from .lift import Lifter
 
 
@@ -63,6 +64,7 @@ class RegionDiff:
     got: List[str] = field(default_factory=list)  # candidate side
     expected_ir: List[str] = field(default_factory=list)  # lifted enclosing block(s)
     got_ir: List[str] = field(default_factory=list)
+    hint: Optional[str] = None  # recognized-pattern fix suggestion, if any
 
     def render(self, ctx: int = 8) -> str:
         exp = self.expected[:ctx] + (["..."] if len(self.expected) > ctx else [])
@@ -71,6 +73,8 @@ class RegionDiff:
         parts = [head,
                  "    expected: %s" % (" ; ".join(exp) or "(none)"),
                  "    got:      %s" % (" ; ".join(got) or "(none)")]
+        if self.hint:
+            parts.append("    hint: %s" % self.hint)
         if self.expected_ir:
             parts.append("    expected IR (target block):")
             parts.extend("      " + l for l in self.expected_ir)
@@ -132,10 +136,12 @@ def _regions_for_bucket(
                   if t_lifter is not None and i2 > i1 else [])
         got_ir = (c_lifter.lift_range(c_ops[c_idx[j1]].pc, c_ops[c_idx[j2 - 1]].pc)
                   if c_lifter is not None and j2 > j1 else [])
+        exp_tok, got_tok = t_tokens[i1:i2], c_tokens[j1:j2]
         regions.append(RegionDiff(
             tag=tag, target_pc=pc, function=label_at(pc),
-            expected=t_tokens[i1:i2], got=c_tokens[j1:j2],
+            expected=exp_tok, got=got_tok,
             expected_ir=exp_ir, got_ir=got_ir,
+            hint=hint_for(exp_tok, got_tok),
         ))
     return regions
 
