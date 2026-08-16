@@ -39,6 +39,13 @@ Two layers:
      chunks and pin the compiler settings before hand-authoring the rest).
    - **Selector minting** — mint a function name for an exact selector when the
      real name is unrecoverable (a collision or a custom name).
+   - **Creation-code check** — the loop matches runtime bytecode; `analyze
+     --creation` / `verify --creation` also fetch the deploy tx and diff the
+     constructor init-code (which never appears in runtime) so a runtime match
+     doesn't fail Etherscan's creation-code verification (see Publishing below).
+   - **Inspect** — `disasm` (a pc-range disassembly) and `diff-asm` (the same
+     offset-stable diff over an arbitrary candidate hex) for pinpointing a single
+     divergent instruction by hand.
 2. **Claude Code skill** (`.claude/skills/verify/SKILL.md`, invoke as `/verify
    <network> <address>`) — Claude is the reconstruction engine, authoring the
    Solidity and refining it against the toolkit's diff feedback in an
@@ -83,11 +90,18 @@ uv run verifyoor verify    <src.sol> <network> <address> --sweep --out runs/<nam
 uv run verifyoor sweep     <template.sol> <network> <address> --out runs/<name>
 uv run verifyoor identify-library <probe.sol> <network> <address> \
   --package @openzeppelin/contracts --path access/Ownable2Step.sol --contract Probe
+uv run verifyoor disasm    <network> <address> --range 0x5ae-0x8f2
+uv run verifyoor diff-asm  <network> <address> --candidate mine.hex --function "transfer(address,uint256)"
 
 # local bytecode works in place of <network> <address>:
 uv run verifyoor analyze   tests/fixtures/sample.hex
 uv run verifyoor verify    tests/fixtures/sample.sol tests/fixtures/sample.hex --sweep
 ```
+
+`disasm` prints `pc: OPCODE imm` lines (optionally a `--range`), and `diff-asm`
+runs the same offset-stable, function-attributed diff `verify` uses but over an
+arbitrary candidate hex — the quick way to localize a single divergent instruction
+between two bytecodes (scope with `--function`/`--range`).
 
 `<network>` is an alias (`ethereum`, `base`, `arbitrum`, `optimism`, `polygon`,
 `bsc`, `sepolia`, …) or a full RPC URL; `--rpc-url` overrides it, and
@@ -112,6 +126,35 @@ uv run verifyoor submit runs/<name> <network> <address> --verifier both
 
 Submits that standard-json to Etherscan (`$ETHERSCAN_API_KEY` or `--api-key`)
 and/or Sourcify (`--verifier etherscan|sourcify|both`) and polls to completion.
+
+### Runtime vs. creation code (constructors)
+
+`verify` matches the **runtime** bytecode (`eth_getCode`). **Sourcify** verifies on
+runtime, so a runtime match publishes there directly. **Etherscan** verifies the
+**creation** bytecode — `init ++ runtime ++ constructor_args` — whose constructor
+`init` segment is *not present in runtime* at all. So a byte-perfect runtime match
+can still be rejected by Etherscan if the reconstructed constructor differs (a
+missing storage init, an event, a different `msg.sender` write) — none of which a
+runtime-only analysis can see.
+
+Two commands close that gap (both fetch the deploy tx via Etherscan's
+`getcontractcreation`, so they need a key):
+
+```sh
+# report what the real constructor does (storage writes never seen in runtime):
+uv run verifyoor analyze <network> <address> --creation
+#   constructor: init 99 bytes, 0 byte(s) of constructor args
+#   storage writes: slot 0 = caller(), slot 1 = 0x1     <- e.g. a reentrancy-guard init
+
+# on a runtime match, also diff the constructor init-code against the deploy tx:
+uv run verifyoor verify <src.sol> <network> <address> --creation --out runs/<name>
+#   == creation: ❌ constructor init-code DIFFERS ==
+#   → add to your constructor: slot 1 = 0x1
+```
+
+`submit` also self-diagnoses: when Etherscan rejects with "deployment bytecode does
+NOT match", it recompiles, fetches the creation code, and prints the constructor
+divergence instead of dead-ending.
 Pass `--constructor-args <hex>` if the contract has a constructor with arguments.
 
 ## Selector mining

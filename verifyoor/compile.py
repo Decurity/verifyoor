@@ -69,6 +69,7 @@ class Settings:
                 "*": {
                     "*": [
                         "abi",
+                        "evm.bytecode.object",
                         "evm.deployedBytecode.object",
                         "evm.deployedBytecode.immutableReferences",
                         "evm.deployedBytecode.linkReferences",
@@ -90,7 +91,8 @@ class Settings:
 @dataclass
 class ContractOut:
     name: str
-    deployed_object: str  # hex string, may contain __$...$__ link placeholders
+    deployed_object: str  # runtime hex, may contain __$...$__ link placeholders
+    creation_object: str = ""  # full creation (init ++ runtime) hex, for --creation checks
     immutable_refs: Dict[str, List[Dict[str, int]]] = field(default_factory=dict)
     link_refs: Dict[str, Any] = field(default_factory=dict)
     abi: Any = None
@@ -140,11 +142,14 @@ def compile_standard(source: str, version: str, settings: Settings, source_name:
     contracts: List[ContractOut] = []
     for _file, by_name in out.get("contracts", {}).items():
         for name, art in by_name.items():
-            dep = art.get("evm", {}).get("deployedBytecode", {}) or {}
+            evm = art.get("evm", {}) or {}
+            dep = evm.get("deployedBytecode", {}) or {}
+            creation = evm.get("bytecode", {}) or {}
             contracts.append(
                 ContractOut(
                     name=name,
                     deployed_object=dep.get("object", "") or "",
+                    creation_object=creation.get("object", "") or "",
                     immutable_refs=dep.get("immutableReferences", {}) or {},
                     link_refs=dep.get("linkReferences", {}) or {},
                     abi=art.get("abi"),

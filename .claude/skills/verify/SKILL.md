@@ -158,6 +158,18 @@ for byte-width detail. Interpretation guide (token-level signals):
 Edit `candidate.sol` (save iterations as `candidate_2.sol`, … for debugging) and
 return to step 4. The diff shrinks region-by-region as you converge.
 
+On a mismatch, `verify --out` also writes the full diff JSON to `runs/<name>/diff.json`
+(with `total_regions` — the JSON caps the shown regions at `--max-regions`, default 8),
+so you don't have to redirect stdout to inspect it. When a region is stubborn and you
+want to stare at the exact bytes, two read-only tools save hand-rolling a disassembler:
+```
+uv run verifyoor disasm   <TARGET> --range 0x5ae-0x8f2          # pc: OPCODE imm
+uv run verifyoor diff-asm  <TARGET> --candidate <compiled.hex> --function "sig(...)"
+```
+`diff-asm` runs the same offset-stable diff over your last compiled `deployedBytecode`
+object vs the target, scoped to one function — the fastest way to see a single
+`DUP2` vs `DUP3` / extra-`PUSH0` divergence in place.
+
 ### 5b. Sweep source variants (when a region has a few equivalent codegens)
 When a divergence comes down to *how* to write something — inline vs a factored
 `private` helper, assembly `sload(SLOT)` vs `StorageSlot.getAddressSlot(SLOT).value`,
@@ -216,6 +228,29 @@ uv run verifyoor submit runs/<name> <network> <address> --verifier both
 Always submit via standard-json, never single-file/flatten — the flatten path lets
 the explorer default the evmVersion, which fails for any non-default-EVM build.
 Add `--constructor-args <hex>` if the contract's constructor takes arguments.
+
+**Runtime vs creation code — check the constructor before submitting to Etherscan.**
+The whole loop above matches the **runtime** bytecode (`eth_getCode`). **Sourcify**
+verifies on runtime, so a match publishes there directly. **Etherscan** verifies the
+**creation** bytecode (`init ++ runtime ++ constructor_args`) — and the constructor
+`init` segment never appears in runtime, so a byte-perfect runtime match can still be
+rejected if your reconstructed constructor differs (a missing storage init like a
+reentrancy-guard `_status = 1`, an event, a different owner write). Runtime analysis
+cannot see any of that. Two commands close the gap (both need an Etherscan key —
+`--api-key` or `$ETHERSCAN_API_KEY` — since creation code comes from the deploy tx):
+- **Before authoring the constructor**, read what the real one does:
+  ```
+  uv run verifyoor analyze <network> <address> --creation
+  ```
+  prints `constructor storage writes: slot 0 = caller(), slot 1 = 0x1` and the
+  constructor-arg length. Declare exactly those initial values in your `constructor`.
+- **On a match, verify the constructor** before `submit`:
+  ```
+  uv run verifyoor verify <src.sol> <network> <address> --creation --out runs/<name>
+  ```
+  exits non-zero and prints `→ add to your constructor: slot N = …` if the init-code
+  differs. Fix, re-verify, then `submit`. (If you skip this and `submit` fails with
+  "deployment bytecode does NOT match", `submit` now self-diagnoses the same way.)
 
 ## Unresolved selectors
 

@@ -17,8 +17,8 @@ from .analyze import analyze
 from .compare import Comparison, compare
 from .compile import CompileResult, Settings, compile_standard, settings_sweep
 from .cfg import Cfg
-from .disasm import disassemble
-from .fetch import fetch_code
+from .disasm import disassemble, render_range
+from .fetch import fetch_code, fetch_creation
 from .lift import Lifter
 from .normdiff import diff
 from .report import build_report, write_artifacts
@@ -46,6 +46,29 @@ def _resolve_source(tokens: List[str], rpc_url: Optional[str], no_cache: bool):
     raise SystemExit("provide '<network> <address>' or a single hex file / hex string")
 
 
+def _parse_range(spec: Optional[str]):
+    """'0xLO-0xHI' | '0xLO..0xHI' | '0xLO' -> (lo, hi). None -> (None, None)."""
+    if not spec:
+        return None, None
+    sep = ".." if ".." in spec else "-"
+    parts = spec.split(sep, 1)
+    lo = int(parts[0], 0)
+    hi = int(parts[1], 0) if len(parts) == 2 and parts[1] else None
+    return lo, hi
+
+
+def _etherscan_key(args) -> Optional[str]:
+    return getattr(args, "api_key", None) or os.environ.get("ETHERSCAN_API_KEY")
+
+
+def _fmt_writes(writes) -> str:
+    out = []
+    for w in writes:
+        val = ("0x%x" % w.value) if w.value is not None else w.value_expr
+        out.append("slot %d = %s" % (w.slot, val))
+    return ", ".join(out) if out else "(none)"
+
+
 def _resolve_analysis(a, use_network: bool):
     sels = [s.selector for s in a.selectors]
     resolved = resolve_selectors(sels, use_network=use_network) if sels else {}
@@ -64,6 +87,7 @@ def cmd_analyze(args) -> int:
     out["resolved_events"] = {k: v for k, v in topics.items() if v}
     out["resolved_errors"] = {k: v for k, v in errors.items() if v}
     out["unresolved_selectors"] = [s.selector for s in a.selectors if not s.signature]
+    creation_lines = _analyze_creation(args, code, out) if getattr(args, "creation", False) else []
     print(json.dumps(out, indent=2))
 
     _eprint("== analyze ==")
@@ -94,7 +118,50 @@ def cmd_analyze(args) -> int:
         _eprint("event topic 0x%s… -> %s" % (h[:12], names))
     for h, names in out["resolved_errors"].items():
         _eprint("error 0x%s -> %s" % (h, names))
+    for line in creation_lines:
+        _eprint(line)
     return 0
+
+
+def _analyze_creation(args, runtime: bytes, out) -> List[str]:
+    """Fetch the deploy tx's creation code, populate out["creation"], return log lines.
+
+    Constructor storage writes never appear in runtime code, so a runtime-only
+    analysis can't see e.g. a reentrancy-guard `_status = 1` init — which is exactly
+    what makes a runtime match fail Etherscan's creation-code verification.
+    """
+    from .creation import constructor_writes, split_creation
+
+    if len(args.target) != 2:
+        return ["--creation needs '<network> <address>' (creation code isn't in a local hex)"]
+    key = _etherscan_key(args)
+    if not key:
+        return ["--creation needs an Etherscan key (--api-key or ETHERSCAN_API_KEY)"]
+    network, address = args.target
+    try:
+        creation = fetch_creation(network, address, key, use_cache=not args.no_cache)
+    except (RuntimeError, ValueError) as e:
+        return ["creation: %s" % e]
+    split = split_creation(creation, runtime)
+    if split is None:
+        out["creation"] = {"creation_len": len(creation), "runtime_located": False}
+        return ["creation: could not locate runtime within creation code (factory/CREATE2?)"]
+    writes = constructor_writes(split.init)
+    out["creation"] = {
+        "creation_len": len(creation),
+        "init_len": len(split.init),
+        "ctor_args_len": len(split.ctor_args),
+        "ctor_args_hex": split.ctor_args.hex(),
+        "runtime_located": True,
+        "constructor_writes": [
+            {"slot": w.slot, "value": w.value, "value_expr": w.value_expr, "pc": w.pc} for w in writes
+        ],
+    }
+    return [
+        "constructor: init %d bytes, %d byte(s) of constructor args" % (len(split.init), len(split.ctor_args)),
+        "  storage writes: %s" % _fmt_writes(writes),
+        "  (declare these initial values in your constructor — they gate Etherscan creation-code verification)",
+    ]
 
 
 def cmd_mine_selector(args) -> int:
@@ -255,8 +322,14 @@ def cmd_verify(args) -> int:
         if unresolved:
             _eprint("⚠ unresolved selectors (names may be wrong): %s" % ", ".join(unresolved))
         _eprint("artifacts: %s" % paths["report_md"])
-        print(json.dumps({"match": True, "settings": best_settings.describe(), "contract": best_contract.name, "artifacts": paths}))
-        return 0
+        result = {"match": True, "settings": best_settings.describe(), "contract": best_contract.name, "artifacts": paths}
+        rc = 0
+        if getattr(args, "creation", False):
+            cres = _verify_creation(args, target, best_contract, a.selectors)
+            result["creation"] = cres
+            rc = 0 if cres.get("match") else 1
+        print(json.dumps(result))
+        return rc
 
     # mismatch: emit normalized, function-attributed diff for the next iteration
     tstrip, _ = metadata.strip_trailing(target)
@@ -267,20 +340,100 @@ def cmd_verify(args) -> int:
     _eprint(best.reason)
     if nd:
         _eprint(nd.summary())
-    print(json.dumps({
+    cap = args.max_regions
+    total = nd.region_count if nd else 0
+    mismatch = {
         "match": False,
         "reason": best.reason,
         "closest_settings": best_settings.describe(),
         "contract": best_contract.name if best_contract else None,
         "length_delta_opcodes": nd.length_delta if nd else None,
+        "total_regions": total,
+        "regions_truncated": total > cap,
         "regions": [
             {"tag": r.tag, "pc": r.target_pc, "function": r.function, "expected": r.expected[:16], "got": r.got[:16],
              "expected_ir": r.expected_ir, "got_ir": r.got_ir}
-            for r in (nd.regions[:8] if nd else [])
+            for r in (nd.regions[:cap] if nd else [])
         ],
         "unresolved_selectors": unresolved,
-    }, indent=2))
+    }
+    # Persist the mismatch report so iterating doesn't require redirecting stdout.
+    if args.out:
+        try:
+            os.makedirs(args.out, exist_ok=True)
+            with open(os.path.join(args.out, "diff.json"), "w") as f:
+                json.dump(mismatch, f, indent=2)
+            _eprint("diff written: %s" % os.path.join(args.out, "diff.json"))
+        except OSError:
+            pass
+    print(json.dumps(mismatch, indent=2))
     return 1
+
+
+def _verify_creation(args, target: bytes, contract, selectors) -> dict:
+    """Compare the constructor init-code against the on-chain deploy tx (post runtime match).
+
+    A runtime match doesn't imply Etherscan will accept the source: Etherscan verifies
+    the creation bytecode, whose constructor segment isn't present in runtime. This
+    fetches that segment and diffs it, surfacing the exact constructor divergence
+    (typically a missing storage init) before a submit round-trip.
+    """
+    from .creation import compare_init
+
+    if len(args.target) != 2:
+        _eprint("⚠ --creation needs '<network> <address>'; skipping creation check")
+        return {"checked": False, "reason": "no network/address"}
+    key = _etherscan_key(args)
+    if not key:
+        _eprint("⚠ --creation needs an Etherscan key (--api-key or ETHERSCAN_API_KEY); skipping")
+        return {"checked": False, "reason": "no api key"}
+    if not contract or not contract.creation_object:
+        return {"checked": False, "reason": "no compiled creation bytecode"}
+    network, address = args.target
+    try:
+        onchain = fetch_creation(network, address, key, use_cache=not args.no_cache)
+    except (RuntimeError, ValueError) as e:
+        _eprint("⚠ creation fetch failed: %s" % e)
+        return {"checked": False, "reason": str(e)}
+
+    compiled = bytes.fromhex(contract.creation_object)
+    ic = compare_init(onchain, compiled, target, selectors)
+    result = {
+        "checked": True,
+        "match": ic.match,
+        "reason": ic.reason,
+        "ctor_args_len": ic.ctor_args_len,
+        "onchain_constructor_writes": [
+            {"slot": w.slot, "value": w.value, "value_expr": w.value_expr} for w in ic.onchain_writes],
+        "compiled_constructor_writes": [
+            {"slot": w.slot, "value": w.value, "value_expr": w.value_expr} for w in ic.compiled_writes],
+    }
+    if ic.match:
+        _eprint("== creation: ✅ constructor init-code matches ==")
+        _eprint("  %s" % ic.reason)
+    else:
+        _eprint("== creation: ❌ constructor init-code DIFFERS ==")
+        _eprint("  %s" % ic.reason)
+        _eprint("  on-chain constructor writes: %s" % _fmt_writes(ic.onchain_writes))
+        _eprint("  your constructor writes:     %s" % _fmt_writes(ic.compiled_writes))
+        missing = _missing_writes(ic.onchain_writes, ic.compiled_writes)
+        if missing:
+            _eprint("  → add to your constructor: %s" % _fmt_writes(missing))
+        if ic.diff is not None:
+            result["init_length_delta"] = ic.diff.length_delta
+            result["init_diff"] = [
+                {"tag": r.tag, "pc": r.target_pc, "expected": r.expected[:16], "got": r.got[:16]}
+                for r in ic.diff.regions[:8]
+            ]
+            _eprint("  init diff: %s" % ic.diff.summary(max_regions=4))
+    return result
+
+
+def _missing_writes(onchain, compiled):
+    have = {(w.slot, w.value_expr) for w in compiled}
+    have_slots = {w.slot for w in compiled}
+    # a write is "missing" if neither the exact (slot,value) nor the slot appears
+    return [w for w in onchain if (w.slot, w.value_expr) not in have and w.slot not in have_slots]
 
 
 def cmd_sweep(args) -> int:
@@ -469,6 +622,13 @@ def cmd_submit(args) -> int:
         _eprint("etherscan: %s — %s" % ("✅" if ok else "❌", msg))
         results["etherscan"] = {"ok": ok, "message": msg}
         overall_ok = overall_ok and ok
+        # Etherscan matches the CREATION bytecode, whose constructor segment isn't in
+        # runtime — so a runtime-verified source can still be rejected here. On that
+        # specific failure, diagnose the constructor divergence instead of dead-ending.
+        if not ok and "deployment bytecode" in msg.lower():
+            diag = _diagnose_creation_mismatch(args, source, meta, version, contract_name, key)
+            if diag:
+                results["etherscan"]["creation_diagnosis"] = diag
 
     if args.verifier in ("sourcify", "both"):
         ok, msg = sourcify_submit(chainid, args.address, std, identifier, long_version, poll=poll)
@@ -478,6 +638,119 @@ def cmd_submit(args) -> int:
 
     print(json.dumps({"address": args.address, "chainid": chainid, "compiler": "v" + long_version, "contract": identifier, "results": results}, indent=2))
     return 0 if overall_ok else 1
+
+
+def _settings_from_meta(settings_block) -> Settings:
+    opt = settings_block.get("optimizer", {}) or {}
+    return Settings(
+        optimizer_enabled=bool(opt.get("enabled", False)),
+        optimizer_runs=int(opt.get("runs", 200)),
+        evm_version=settings_block.get("evmVersion"),
+        via_ir=bool(settings_block.get("viaIR", False)),
+    )
+
+
+def _diagnose_creation_mismatch(args, source, meta, version, contract_name, key):
+    """After an Etherscan 'deployment bytecode does not match', pinpoint the cause.
+
+    Recompiles the submitted source, fetches the on-chain creation + runtime, and
+    diffs the constructor init-code — turning an opaque rejection into "add a write to
+    slot N". Best-effort: any failure here just returns None (the submit result stands).
+    """
+    from .creation import compare_init
+
+    try:
+        st = _settings_from_meta(meta["settings"])
+        res = compile_standard(source, version, st, source_name=meta.get("sourceName", "source.sol"))
+        contract = res.pick(contract_name=contract_name)
+        if not contract or not contract.creation_object:
+            return None
+        runtime = fetch_code(args.network, args.address, use_cache=not getattr(args, "no_cache", False))
+        onchain = fetch_creation(args.network, args.address, key, use_cache=not getattr(args, "no_cache", False))
+        ic = compare_init(onchain, bytes.fromhex(contract.creation_object), runtime)
+    except Exception as e:  # noqa: BLE001 — diagnosis must never mask the real result
+        _eprint("  (creation diagnosis unavailable: %s)" % e)
+        return None
+
+    if ic.match:
+        _eprint("  creation init-code actually matches — mismatch is elsewhere "
+                "(constructor args? wrong contract name? metadata settings?)")
+        return {"init_match": True, "reason": ic.reason}
+    _eprint("  → likely cause: constructor init-code differs — %s" % ic.reason)
+    _eprint("    on-chain constructor writes: %s" % _fmt_writes(ic.onchain_writes))
+    _eprint("    your constructor writes:     %s" % _fmt_writes(ic.compiled_writes))
+    missing = _missing_writes(ic.onchain_writes, ic.compiled_writes)
+    if missing:
+        _eprint("    add to your constructor: %s" % _fmt_writes(missing))
+    return {
+        "init_match": False,
+        "reason": ic.reason,
+        "onchain_constructor_writes": [{"slot": w.slot, "value": w.value, "value_expr": w.value_expr} for w in ic.onchain_writes],
+        "compiled_constructor_writes": [{"slot": w.slot, "value": w.value, "value_expr": w.value_expr} for w in ic.compiled_writes],
+        "missing_writes": [{"slot": w.slot, "value": w.value, "value_expr": w.value_expr} for w in missing],
+    }
+
+
+def cmd_disasm(args) -> int:
+    """Plain `pc: OPCODE imm` disassembly of a bytecode source, optionally a pc range."""
+    code, _label = _resolve_source(args.target, args.rpc_url, args.no_cache)
+    if not args.raw:
+        stripped, md = metadata.strip_trailing(code)
+        if md.present:
+            code = stripped
+    lo, hi = _parse_range(args.range)
+    for line in render_range(code, lo, hi):
+        print(line)
+    return 0
+
+
+def cmd_diff_asm(args) -> int:
+    """Normalized, function-attributed opcode diff between two bytecode images.
+
+    Same offset-stable diff `verify` runs, but over an arbitrary candidate hex instead
+    of a compile — the fast way to localize a single divergent instruction between two
+    bytecodes (e.g. a hand-tweaked compile vs the target). `--function` scopes to one
+    function's regions; `--range` to a target pc window.
+    """
+    target, _tl = _resolve_source(args.target, args.rpc_url, args.no_cache)
+    candidate = load_bytecode(args.candidate)
+    a = analyze(target)
+    _resolve_analysis(a, use_network=not args.offline)
+    tstrip, _ = metadata.strip_trailing(target)
+    cstrip, _ = metadata.strip_trailing(candidate)
+    nd = diff(tstrip, cstrip, a.selectors, lift_ir=not args.no_ir)
+
+    lo, hi = _parse_range(args.range)
+    regions = nd.regions
+    if args.function:
+        regions = [r for r in regions if args.function in r.function]
+    if lo is not None:
+        regions = [r for r in regions if lo <= r.target_pc < (hi if hi is not None else 1 << 30)]
+
+    _eprint("== diff-asm == candidate length delta = %+d opcodes; %d region(s)%s"
+            % (nd.length_delta, len(regions),
+               (" of %d (filtered)" % nd.region_count) if len(regions) != nd.region_count else ""))
+    if args.json:
+        print(json.dumps({
+            "match": nd.match,
+            "length_delta_opcodes": nd.length_delta,
+            "total_regions": nd.region_count,
+            "shown_regions": len(regions),
+            "regions": [
+                {"tag": r.tag, "pc": r.target_pc, "function": r.function,
+                 "expected": r.expected[:16], "got": r.got[:16],
+                 "expected_ir": r.expected_ir, "got_ir": r.got_ir}
+                for r in regions[:args.max_regions]
+            ],
+        }, indent=2))
+    else:
+        if nd.match:
+            print("normalized opcode streams are identical (any residual diff is data/immediates only)")
+        for r in regions[:args.max_regions]:
+            print(r.render(ctx=args.context))
+        if len(regions) > args.max_regions:
+            print("... %d more region(s) (raise --max-regions)" % (len(regions) - args.max_regions))
+    return 0 if nd.match else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -491,6 +764,8 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
     pa.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
     pa.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
+    pa.add_argument("--creation", action="store_true", help="also fetch the deploy tx and report constructor storage writes (needs Etherscan key)")
+    pa.add_argument("--api-key", help="Etherscan API key for --creation (else $ETHERSCAN_API_KEY)")
     pa.set_defaults(func=cmd_analyze)
 
     pm = sub.add_parser("mine-selector", help="mint a func name whose selector matches exactly (for unrecoverable names)")
@@ -520,8 +795,11 @@ def build_parser() -> argparse.ArgumentParser:
     pv.add_argument("--evm", help="evmVersion override")
     pv.add_argument("--via-ir", action="store_true")
     pv.add_argument("--sweep", action="store_true", help="sweep optimizer/evm/viaIR until match")
-    pv.add_argument("--out", help="artifacts output directory (on match)")
+    pv.add_argument("--out", help="artifacts output directory (report on match; diff.json on mismatch)")
     pv.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
+    pv.add_argument("--creation", action="store_true", help="on match, also verify the constructor init-code against the deploy tx (what Etherscan checks; needs Etherscan key)")
+    pv.add_argument("--api-key", help="Etherscan API key for --creation (else $ETHERSCAN_API_KEY)")
+    pv.add_argument("--max-regions", type=int, default=8, help="max divergent regions to emit in diff JSON (default 8)")
     pv.set_defaults(func=cmd_verify)
 
     pw = sub.add_parser("sweep", help="compile a templated candidate across all source variants x settings until a match")
@@ -565,6 +843,28 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--contract", help="contract name override")
     ps.add_argument("--no-wait", action="store_true", help="submit without polling for the result")
     ps.set_defaults(func=cmd_submit)
+
+    pd = sub.add_parser("disasm", help="disassemble a bytecode source (pc: OPCODE imm), optionally a pc range")
+    pd.add_argument("target", nargs="+", help=src_help)
+    pd.add_argument("--range", help="pc window, e.g. 0x5ae-0x8f2 (or 0x5ae for open-ended)")
+    pd.add_argument("--raw", action="store_true", help="keep the trailing metadata (default strips it)")
+    pd.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
+    pd.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
+    pd.set_defaults(func=cmd_disasm)
+
+    pda = sub.add_parser("diff-asm", help="normalized, function-attributed opcode diff between a target and a candidate hex")
+    pda.add_argument("target", nargs="+", help=src_help)
+    pda.add_argument("--candidate", required=True, help="candidate bytecode: a hex file or 0x-hex string (e.g. a solc deployedBytecode object)")
+    pda.add_argument("--function", help="only show regions attributed to functions matching this substring")
+    pda.add_argument("--range", help="only show regions whose target pc is in this window, e.g. 0x5ae-0x8f2")
+    pda.add_argument("--context", type=int, default=8, help="opcodes of expected/got to show per region (default 8)")
+    pda.add_argument("--max-regions", type=int, default=20, help="max regions to print (default 20)")
+    pda.add_argument("--no-ir", action="store_true", help="skip the lifted-IR block for each region (faster)")
+    pda.add_argument("--json", action="store_true", help="emit machine-readable JSON instead of the rendered diff")
+    pda.add_argument("--rpc-url", help="explicit RPC URL (overrides the network alias)")
+    pda.add_argument("--no-cache", action="store_true", help="do not use cached fetched bytecode")
+    pda.add_argument("--offline", action="store_true", help="skip Sourcify 4byte name lookups")
+    pda.set_defaults(func=cmd_diff_asm)
     return p
 
 
