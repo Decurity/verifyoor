@@ -32,7 +32,9 @@ Two layers:
      change in one function can't desync or misattribute regions in another. A
      divergence in genuinely shared codegen reads `shared helper`; the dispatcher
      is its own bucket. (Falls back to a single global pass when a CFG isn't
-     available for both sides.)
+     available for both sides.) A small pattern recognizer attaches a `hint` to
+     regions matching a known source→bytecode signature (selector-encoding cast,
+     unchecked-vs-checked increment, custom-error vs `require`), naming the fix.
    - **Brute-force the last mile** — a source-variant sweep (`sweep`: expand a
      templated candidate's `<<< a ||| b >>>` markers across all variants ×
      settings, ranked by diff-region count, until byte-exact) and a
